@@ -292,7 +292,10 @@ try{
  check((await call(retentionPath)).status==='CONFIRMED','Confirmed event remains visible on the entire tenth calendar day');
  check((await client.query("SELECT count(*) FROM usage_metrics WHERE action='old_metric'")).rows[0].count==='0','Usage counters rotate after ten UTC calendar days');
  await client.query("UPDATE event_slots SET slot_date=(now() AT TIME ZONE 'Europe/Rome')::date-11 WHERE id=$1",[retentionSlots[0].id]);
+ const {id:unknownZone}=(await client.query("INSERT INTO events (public_token,admin_token,title,location,organizer_name,organizer_email,timezone) VALUES ('unknown-zone-public-0','unknown-zone-admin-00','Old','Roma','Ada','zone@example.test','Mars/City') RETURNING id")).rows[0];
+ await client.query("INSERT INTO event_slots (event_id,slot_date,start_time) VALUES ($1,current_date-30,'20:00')",[unknownZone]);
  check((await fetch(api+'/api/cron/email',{headers:{Authorization:`Bearer ${cronSecret}`}})).ok,'Retention runs from the protected cron');
+ check((await client.query('SELECT count(*) FROM events WHERE id=$1',[unknownZone])).rows[0].count==='0','A zone unknown to PostgreSQL falls back to UTC instead of blocking retention');
  await call(retentionPath,'GET',undefined,404);
  check((await call('/api/events/'+single.public_token)).slots.length===2,'Open event uses its latest proposal for retention');
  const remaining=(await client.query(`SELECT

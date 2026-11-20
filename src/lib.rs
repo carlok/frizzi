@@ -333,6 +333,7 @@ async fn create(
     let secret = nanoid::nanoid!();
     let mut tx = pool.begin().await.map_err(db)?;
     rate_limit(&mut tx, &format!("create:{organizer_email}"), 5).await?;
+    require_database_timezone(&mut tx, &e.timezone).await?;
     let id: Uuid = sqlx::query_scalar("INSERT INTO events (public_token,admin_token,title,description,location,organizer_name,organizer_email,organizer_locale,allow_multiple_choices,timezone,voting_deadline,location_geo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id")
         .bind(&public).bind(&secret).bind(e.title.trim()).bind(&e.description).bind(e.location.trim())
         .bind(e.organizer_name.trim()).bind(&organizer_email).bind(locale(&e.locale))
@@ -354,6 +355,22 @@ async fn create(
     tx.commit().await.map_err(db)?;
     schedule_mail(pool, runtime);
     Ok(Json(json!({"public_token": public})))
+}
+/// chrono-tz and PostgreSQL ship separate tz databases; SQL (e.g. retention) needs the zone too.
+async fn require_database_timezone(
+    tx: &mut Transaction<'_, Postgres>,
+    timezone: &str,
+) -> Result<(), ApiError> {
+    let known: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_timezone_names WHERE name=$1)")
+            .bind(timezone)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    if !known {
+        return Err(bad());
+    }
+    Ok(())
 }
 type SlotColumns = (Vec<NaiveDate>, Vec<NaiveTime>, Vec<Option<NaiveTime>>);
 fn slot_columns<'a>(slots: impl IntoIterator<Item = &'a SlotInput>) -> SlotColumns {
@@ -870,6 +887,9 @@ async fn update_details(
     let old = sqlx::query("SELECT id,title,description,location,organizer_name,allow_multiple_choices,timezone,voting_deadline,location_geo FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE")
         .bind(public).bind(secret).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
     let id: Uuid = old.get("id");
+    if old.get::<String, _>("timezone") != v.timezone {
+        require_database_timezone(&mut tx, &v.timezone).await?;
+    }
     let old_location: String = old.get("location");
     let old_geo = old
         .get::<Option<sqlx::types::Json<LocationGeo>>, _>("location_geo")
