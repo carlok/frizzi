@@ -3,20 +3,24 @@
  import { page } from '$app/state';
  import { afterNavigate } from '$app/navigation';
  import { ArrowUpRight, Check, CircleCheck, CircleX, Copy, LockKeyhole, MapPin, Clock, Navigation, Users, Share2, CalendarDays, CalendarClock, PartyPopper, Star, Vote } from '@lucide/svelte';
- import { lang, t, errorText, formatDate, formatTime } from '#lib/i18n.ts';
+ import { lang, t, errorText, formatDate, formatTime, intlLocale } from '#lib/i18n.ts';
  import { track } from '#lib/telemetry.ts';
  import * as poll from '#lib/poll.ts';
+ import { parsePath } from '#lib/route.ts';
+ import { datesChanged, slotDraft, slotPayload } from '#lib/slots.ts';
+ import { onDestroy } from 'svelte';
  import LocationAttribution from '#lib/components/LocationAttribution.svelte';
  import EventCalendar from '#lib/components/EventCalendar.svelte';
  import EventFields from '#lib/components/EventFields.svelte';
  import ParticipantMessage from '#lib/components/ParticipantMessage.svelte';
+ import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
  import { Button } from '#lib/components/ui/button/index.ts';
  import type { EventData, LocationGeo, SlotDraft } from '#lib/types.ts';
  import availabilityParty from '#lib/assets/availability-party.webp';
 
  let event:EventData|null=null;
  let mode=page.params.path?'loading':'create';
- let loading=false, busy=false, tiebreakSaving=false, copied=false, editingDetails=false;
+ let loading=false, refreshing=false, busy=false, tiebreakSaving=false, copied=false, editingDetails=false;
  let errorCode='', noticeKey:keyof typeof $t|null=null;
  let publicToken='', secret='', link='';
  let title='', description='', location='', organizer_name='', organizer_email='';
@@ -24,11 +28,13 @@
  let allow_multiple_choices=true, timezone='Europe/Rome', votingDeadline='';
  let canShare=false, recoveryOpen=false, recovering=false, recovered=false;
  let recoveryEmail='', recoveryError='';
- let slots:SlotDraft[]=[{date:'',start:'',end:''}];
+ let slots:SlotDraft[]=[slotDraft()];
  let name='', email='', selected:string[]=[];
  const selectionSources=new Set<'calendar'|'list'>();
  let calendarMonth='', adminSlot:string|null=null;
- let generation=0;
+ let generation=0, copiedTimer:ReturnType<typeof setTimeout>|undefined;
+ let confirmDialog:ConfirmDialog;
+ onDestroy(()=>clearTimeout(copiedTimer));
  const pollStates = {
    open: { icon: Vote, label: 'open' },
    closed: { icon: LockKeyhole, label: 'pollClosed' },
@@ -45,17 +51,13 @@
    tiebreakSaving=false;
    canShare=typeof navigator.share==='function';
    recoveryOpen=false; recovering=false; recovered=false; recoveryEmail=''; recoveryError='';
-   const parts=page.params.path?.split('/').filter(Boolean)||[];
-   errorCode=''; noticeKey=null; event=null; editingDetails=false; name='';email='';selected=[];link='';
-   if(!parts.length){mode='create';timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Rome';return;}
-   publicToken=parts[0];
-   const token=/^[A-Za-z0-9_-]{21}$/;
-   if(!token.test(publicToken) || (parts.length===3 && parts[1]!=='admin') || parts.length>3 || (parts[1]==='admin' && parts.length!==3)){
-     mode='event';errorCode='not_found';return;
-   }
-   mode=parts.length===3?'admin':parts.length===2?'edit':'event';
-   secret=mode==='admin'?parts[2]:mode==='edit'?parts[1]:'';
-   if(secret && !token.test(secret)){errorCode='not_found';return;}
+   errorCode=''; noticeKey=null; event=null; editingDetails=false; name='';email='';selected=[];link='';copied=false;
+   title='';description='';location='';locationGeo=null;organizer_name='';organizer_email='';
+   slots=[slotDraft()];votingDeadline='';allow_multiple_choices=true;
+   const route=parsePath(page.params.path);
+   if(!route){mode='event';errorCode='not_found';return;}
+   ({mode,publicToken,secret}=route);
+   if(mode==='create'){timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Rome';return;}
    await load(current);
  }
  async function request(url:string,method='GET',body?:unknown){
@@ -77,7 +79,8 @@
    return data;
  }
  async function load(current=generation){
-   loading=true;
+   // The full-page loader only covers the first load; refreshes keep the page mounted.
+   loading=!event; refreshing=!!event;
    try{
      const path=mode==='admin'?`/admin/${secret}`:'';
      const data:EventData=await request(`/api/events/${publicToken}${path}`);
@@ -87,14 +90,15 @@
      event=data;
      if(person){name=person.name;email=person.email;selected=person.slots;}
      if (!data.slots.some(slot=>slot.id===adminSlot)) adminSlot=null;
-     const confirmedSlot=data.slots.find(slot=>slot.id===data.confirmed_slot_id);
-     if (confirmedSlot || !data.slots.some(slot=>slot.date.startsWith(calendarMonth+'-'))) {
+     // Pick the month on the first load (calendarMonth is empty) or when the shown month lost its dates.
+     if (!data.slots.some(slot=>slot.date.startsWith(calendarMonth+'-'))) {
+       const confirmedSlot=data.slots.find(slot=>slot.id===data.confirmed_slot_id);
        calendarMonth=(confirmedSlot || data.slots.find(slot=>selected.includes(slot.id)) || data.slots[0])?.date.slice(0,7) || '';
      }
-   }catch(error){if(current===generation){errorCode=error instanceof Error?error.message:'error';event=null;}}
-   finally{if(current===generation)loading=false;}
+   }catch(error){if(current===generation)errorCode=error instanceof Error?error.message:'error';}
+   finally{if(current===generation){loading=false;refreshing=false;}}
  }
- function payload(){return {title,description,location,location_geo:locationGeo,organizer_name,locale:$lang||'it',allow_multiple_choices,timezone,voting_deadline:votingDeadline||null,slots:slots.map(s=>({...s,end:s.end||null}))};}
+ function payload(){return {title,description,location,location_geo:locationGeo,organizer_name,locale:$lang||'it',allow_multiple_choices,timezone,voting_deadline:votingDeadline||null,slots:slotPayload(slots)};}
  function validateSlots(creating=false){
    const dates=slots.map(s=>s.date);
    if(new Set(dates).size!==dates.length){
@@ -124,7 +128,7 @@
    finally{busy=false;}
  }
  async function submitVote(){
-   errorCode='';busy=true;
+   errorCode='';noticeKey=null;busy=true;
    try{
      await request(`/api/events/${publicToken}/${mode==='edit'?`participant/${secret}`:'votes'}`,mode==='edit'?'PUT':'POST',{name,email,locale:$lang||'it',slots:selected});
      if(selectionSources.size>1) track('vote_both');
@@ -158,10 +162,15 @@
    if (action && !action.disabled) action.focus();
    else document.getElementById(`option-${id}`)?.focus();
  }
- async function setStatus(status:string,id:string|null=null){
+ async function setStatus(status:'OPEN'|'CONFIRMED'|'CANCELLED',id:string|null=null){
    if(tiebreakSaving)return;
-   if(status==='CANCELLED' && !window.confirm($t.cancelPrompt))return;
-   errorCode='';busy=true;
+   // Every status change emails all participants, so it always needs an explicit confirmation.
+   const slot=event?.slots.find(slot=>slot.id===id);
+   const question=status==='CONFIRMED'?{title:$t.confirmDateTitle,text:$t.confirmDateText,detail:slot&&formatDate(slot.date,$lang),confirm:$t.confirmDateAction,cancel:$t.goBack}
+     :status==='OPEN'?{title:$t.reopenTitle,text:$t.reopenText,confirm:$t.reopen,cancel:$t.goBack}
+     :{title:$t.cancelPrompt,text:$t.cancelText,confirm:$t.cancel,cancel:$t.keepEvent,danger:true};
+   if(!await confirmDialog.ask(question))return;
+   errorCode='';noticeKey=null;busy=true;
    try{await request(`/api/events/${publicToken}/admin/${secret}`,'PUT',{status,confirmed_slot_id:id,locale:$lang||'it'});adminSlot=null;noticeKey='statusSaved';await load();}
    catch(error){errorCode=error instanceof Error?error.message:'error';}
    finally{busy=false;}
@@ -185,11 +194,13 @@
    if(!event)return;
    title=event.title;description=event.description||'';location=event.location;locationGeo=event.location_geo;organizer_name=event.organizer_name;
    allow_multiple_choices=event.allow_multiple_choices;timezone=event.timezone;votingDeadline=event.voting_deadline||'';
-   slots=event.slots.map(s=>({...s,start:s.start.slice(0,5),end:s.end?.slice(0,5)||''}));
+   slots=event.slots.map(s=>slotDraft({...s,start:s.start.slice(0,5),end:s.end?.slice(0,5)||''}));
    editingDetails=!editingDetails;
  }
  async function saveDetails(){
-   errorCode='';busy=true;
+   if(event && (timezone!==event.timezone || datesChanged(event.slots,slots))
+     && !await confirmDialog.ask({title:$t.datesChangedTitle,text:$t.datesChangedHint,confirm:$t.save,cancel:$t.goBack}))return;
+   errorCode='';noticeKey=null;busy=true;
    try{validateSlots();await request(`/api/events/${publicToken}/admin/${secret}/details`,'PUT',payload());noticeKey='changesSaved';editingDetails=false;await load();}
    catch(error){errorCode=error instanceof Error?error.message:'error';}
    finally{busy=false;}
@@ -214,8 +225,12 @@
    }
  }
  async function copy(){
-   try{await navigator.clipboard.writeText(publicLink());track('share_copy');copied=true;setTimeout(()=>copied=false,2000);}
-   catch{track('browser_clipboard');errorCode='error';}
+   errorCode='';
+   try{
+     await navigator.clipboard.writeText(publicLink());track('share_copy');copied=true;
+     clearTimeout(copiedTimer);copiedTimer=setTimeout(()=>copied=false,2000);
+   }
+   catch{track('browser_clipboard');errorCode='copy_failed';}
  }
  function webLocation(text:string){
    try {
@@ -231,7 +246,7 @@
  $: tiedLeaders=poll.tiedLeaders(event,voteCounts);
  $: decisiveSlot=poll.decisiveSlot(event,tiedLeaders);
  $: leadingSlots=poll.leadingSlots(event,tiedLeaders,decisiveSlot);
- $: numbers=new Intl.NumberFormat($lang||'it');
+ $: numbers=new Intl.NumberFormat(intlLocale($lang));
  $: pollState=poll.pollState(event);
 </script>
 
@@ -269,10 +284,10 @@
   <a href={resolve('')}>{$t.back}</a>
   </section>
  </div>
-{:else if loading || mode==='loading'}
+{:else if !event && (loading || mode==='loading')}
  <div class="center-card" role="status">{$t.loading}</div>
 {:else if event}
- <div class="event-layout">
+ <div class="event-layout" aria-busy={refreshing}>
   <section class="event-header">
    <span class="poll-status" data-state={pollState}>
     <svelte:component this={pollStates[pollState].icon} size={17} aria-hidden="true"/>
@@ -314,7 +329,7 @@
    {#if confirmed}
     <div class="event-confirmed flex flex-wrap items-center justify-between gap-3">
      <div><strong>{$t.confirmedDate}: {formatDate(confirmed.date,$lang)}</strong><br/>{formatTime(confirmed.start,$lang)}{confirmed.end?' – '+formatTime(confirmed.end,$lang):''} · {event.timezone}</div>
-     <a class="button outline gap-2" href={resolve(`api/events/${publicToken}/calendar.ics`)} download="frizzi.ics"><CalendarDays size={16}/>{$t.addCalendar}</a>
+     <a class="button btn-outline gap-2" href={resolve(`api/events/${publicToken}/calendar.ics`)} download="frizzi.ics"><CalendarDays size={16}/>{$t.addCalendar}</a>
     </div>
    {:else if event.status==='OPEN' && event.voting_deadline}
     <div class="vote-deadline" class:expired={event.voting_ended}>
@@ -416,7 +431,7 @@
     {/if}
    </section>
    <section class="panel responses">
-    <h2>{$t.people} <span class="count">{event.participants.length}</span></h2>
+    <h2>{$t.people} <span class="count">{numbers.format(event.participants.length)}</span></h2>
     {#if mode==='admin'}
      <ParticipantMessage recipients={event.participants.length}
       send={(message,request_id)=>request(`/api/events/${publicToken}/admin/${secret}/messages`,'POST',{message,request_id})}/>
@@ -453,7 +468,7 @@
       {@const count=voteCounts.get(slot.id)||0}
       <div class="result"><strong>{formatDate(slot.date,$lang)}</strong>
        {#if event.status==='CONFIRMED' && decisiveSlot?.id===slot.id}<span class="tiebreak-badge"><Star size={14} aria-hidden="true"/>{$t.tiebreakBadge}</span>{/if}
-       <span>{count} {$t.available}</span><div class="bar"><i style={`width:${100*count/event.participants.length}%`}></i></div><small>{event.participants.filter(p=>p.slots.includes(slot.id)).map(p=>p.name).join(', ')}</small>
+       <span>{numbers.format(count)} {$t.available}</span><div class="bar"><i style={`width:${100*count/event.participants.length}%`}></i></div><small>{event.participants.filter(p=>p.slots.includes(slot.id)).map(p=>p.name).join(', ')}</small>
       </div>
      {/each}</div>
     {/if}
@@ -462,8 +477,10 @@
   </div>
  </div>
 {:else}
- <section class="center-card"><p class="error" role="alert">{errorText(errorCode||'not_found',$t)}</p><a href={resolve('')}>{$t.back}</a></section>
+ <section class="center-card"><h1>{errorCode==='not_found'?$t.pageNotFound:$t.errorTitle}</h1><p class="error" role="alert">{errorText(errorCode||'not_found',$t)}</p><a href={resolve('')}>{$t.back}</a></section>
 {/if}
+
+<ConfirmDialog bind:this={confirmDialog}/>
 
 <style>
  .poll-status {

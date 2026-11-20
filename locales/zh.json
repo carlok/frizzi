@@ -128,7 +128,19 @@
     "tiebreakBadge": "组织者的决胜票",
     "tiebreakUndo": "撤回决胜票",
     "tiebreakUnavailable": "领先日期已变化，请查看最新结果。",
-    "tiedDates": "并列第一的日期"
+    "tiedDates": "并列第一的日期",
+    "confirmDateTitle": "确认此日期？",
+    "confirmDateText": "所有参与者都会收到一封包含所选日期的邮件。",
+    "confirmDateAction": "确认并通知所有人",
+    "reopenTitle": "重新开放投票？",
+    "reopenText": "所有参与者都会收到邮件，并可以重新投票。",
+    "cancelText": "所有参与者都会收到活动取消的邮件。",
+    "keepEvent": "保留活动",
+    "datesChangedTitle": "保存新的日期？",
+    "goBack": "返回",
+    "copyFailed": "无法复制链接。请选中链接后手动复制。",
+    "pageNotFound": "页面未找到",
+    "errorTitle": "出了点问题"
   },
   "pdf": {
     "invitation": "邀请函",

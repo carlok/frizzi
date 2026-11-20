@@ -17,17 +17,21 @@ init({ fallbackLocale:'it', initialLocale:'it' });
 export const lang = locale;
 export const t = derived(format, $format => Object.fromEntries(Object.keys(it.ui).map(key=>[key,$format(`ui.${key}`)])) as typeof it.ui);
 export function errorText(code: string, messages: typeof it.ui): string {
-    const keys: Record<string,keyof typeof it.ui> = { invalid_input:'invalidInput', email_exists:'emailExists', not_found:'notFound', multiple_votes_exist:'multipleVotesExist', rate_limited:'rateLimited', event_closed:'eventClosed', invalid_deadline:'invalidDeadline', deadline_passed:'deadlinePassed', tiebreak_unavailable:'tiebreakUnavailable', service_unavailable:'serviceUnavailable' };
+    const keys: Record<string,keyof typeof it.ui> = { invalid_input:'invalidInput', email_exists:'emailExists', not_found:'notFound', multiple_votes_exist:'multipleVotesExist', rate_limited:'rateLimited', event_closed:'eventClosed', invalid_deadline:'invalidDeadline', deadline_passed:'deadlinePassed', tiebreak_unavailable:'tiebreakUnavailable', service_unavailable:'serviceUnavailable', copy_failed:'copyFailed' };
     const [kind, reference] = code.split(':', 2);
-    const message = messages[keys[kind] || 'error'];
+    const message = messages[Object.hasOwn(keys, kind) ? keys[kind] : 'error'];
     return reference && /^[a-f0-9-]{36}$/.test(reference) ? `${message} ${messages.supportCode} ${reference}` : message;
 }
 const dateLocales: Record<string, string> = {
     it: 'it-IT', en: 'en-GB', es: 'es-ES', zh: 'zh-CN', hi: 'hi-IN', ar: 'ar-SA',
     fr: 'fr-FR', bn: 'bn-BD', pt: 'pt-PT', ru: 'ru-RU', de: 'de-DE'
 };
+/** The regional locale used for every Intl formatter, so dates, times, weeks and numbers agree. */
+export function intlLocale(language: string | null | undefined) {
+    return Object.hasOwn(dateLocales, language ?? '') ? dateLocales[language!] : dateLocales.it;
+}
 export function dateFormatter(language: string | null | undefined, withWeekday = false) {
-    return new Intl.DateTimeFormat(dateLocales[language ?? ''] ?? dateLocales.it, {
+    return new Intl.DateTimeFormat(intlLocale(language), {
         weekday: withWeekday ? 'long' : undefined,
         day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC', calendar: 'gregory'
     });
@@ -37,5 +41,5 @@ export function formatDate(date: string, language: string | null | undefined) {
     return `${dateFormatter(language, true).formatToParts(day).find(part => part.type === 'weekday')?.value} · ${dateFormatter(language).format(day)}`;
 }
 export function formatTime(time: string, locale: string | null | undefined) {
-    return new Intl.DateTimeFormat(locale || 'it',{hour:'numeric',minute:'2-digit',timeZone:'UTC'}).format(new Date(`2000-01-01T${time}Z`));
+    return new Intl.DateTimeFormat(intlLocale(locale),{hour:'numeric',minute:'2-digit',timeZone:'UTC'}).format(new Date(`2000-01-01T${time}Z`));
 }

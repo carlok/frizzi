@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
-import { dateFormatter, errorText, formatDate, formatTime, lang, languages, t } from './i18n.ts';
+import { dateFormatter, errorText, formatDate, formatTime, intlLocale, lang, languages, t } from './i18n.ts';
 import it_ from '../../locales/it.json';
 import en from '../../locales/en.json';
 
@@ -22,6 +22,15 @@ describe('errorText', () => {
         expect(errorText('error', ui)).toBe(ui.error);
         expect(errorText('something_new', ui)).toBe(ui.error);
         expect(errorText('', ui)).toBe(ui.error);
+    });
+
+    it('ignores codes inherited from Object.prototype', () => {
+        for (const code of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf'])
+            expect(errorText(code, ui), code).toBe(ui.error);
+    });
+
+    it('has a message for a failed copy to the clipboard', () => {
+        expect(errorText('copy_failed', ui)).toBe(ui.copyFailed);
     });
 
     it('appends a support code when the reference is a request id', () => {
@@ -86,7 +95,14 @@ describe('date and time formatting', () => {
     it('formats times without shifting them', () => {
         expect(formatTime('18:30', 'it')).toBe('18:30');
         expect(formatTime('09:05:00', 'it')).toBe('9:05');
-        expect(formatTime('18:30', 'en-US')).toMatch(/^6:30\sPM$/);
         expect(formatTime('18:30', null)).toBe('18:30');
+    });
+
+    it('formats times with the same regional locale as dates', () => {
+        expect(intlLocale('en')).toBe('en-GB');
+        expect(intlLocale('pt')).toBe('pt-PT');
+        expect(intlLocale('xx')).toBe('it-IT');
+        expect(intlLocale('toString')).toBe('it-IT');
+        expect(formatTime('18:30', 'en')).toBe('18:30');
     });
 });

@@ -128,7 +128,19 @@
     "tiebreakBadge": "Vote décisif de l’organisation",
     "tiebreakUndo": "Annuler le départage",
     "tiebreakUnavailable": "Les dates en tête ont changé. Consulte les résultats actualisés.",
-    "tiedDates": "Dates en tête à égalité"
+    "tiedDates": "Dates en tête à égalité",
+    "confirmDateTitle": "Confirmer cette date ?",
+    "confirmDateText": "Tous les participants recevront un e-mail avec la date choisie.",
+    "confirmDateAction": "Confirmer et prévenir tout le monde",
+    "reopenTitle": "Rouvrir le sondage ?",
+    "reopenText": "Tous les participants recevront un e-mail et pourront voter à nouveau.",
+    "cancelText": "Tous les participants recevront un e-mail d’annulation.",
+    "keepEvent": "Garder l’événement",
+    "datesChangedTitle": "Enregistrer les nouvelles dates ?",
+    "goBack": "Retour",
+    "copyFailed": "Impossible de copier le lien. Sélectionnez-le et copiez-le manuellement.",
+    "pageNotFound": "Page introuvable",
+    "errorTitle": "Un problème est survenu"
   },
   "pdf": {
     "invitation": "Lettre d’invitation",

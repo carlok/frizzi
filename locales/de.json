@@ -128,7 +128,19 @@
     "tiebreakBadge": "Entscheidende Stimme der Organisation",
     "tiebreakUndo": "Stichentscheid zurücknehmen",
     "tiebreakUnavailable": "Die führenden Termine haben sich geändert. Prüfe die aktuellen Ergebnisse.",
-    "tiedDates": "Termine mit Gleichstand auf Platz eins"
+    "tiedDates": "Termine mit Gleichstand auf Platz eins",
+    "confirmDateTitle": "Diesen Termin bestätigen?",
+    "confirmDateText": "Alle Teilnehmenden erhalten eine E-Mail mit dem gewählten Termin.",
+    "confirmDateAction": "Bestätigen und alle benachrichtigen",
+    "reopenTitle": "Umfrage erneut öffnen?",
+    "reopenText": "Alle Teilnehmenden erhalten eine E-Mail und können erneut abstimmen.",
+    "cancelText": "Alle Teilnehmenden erhalten eine E-Mail zur Absage.",
+    "keepEvent": "Event behalten",
+    "datesChangedTitle": "Neue Termine speichern?",
+    "goBack": "Zurück",
+    "copyFailed": "Der Link konnte nicht kopiert werden. Markiere ihn und kopiere ihn manuell.",
+    "pageNotFound": "Seite nicht gefunden",
+    "errorTitle": "Etwas ist schiefgelaufen"
   },
   "pdf": {
     "invitation": "Einladung",

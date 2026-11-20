@@ -128,7 +128,19 @@
     "tiebreakBadge": "Voto decisivo da organização",
     "tiebreakUndo": "Anular o desempate",
     "tiebreakUnavailable": "As datas mais votadas mudaram. Consulta os resultados atualizados.",
-    "tiedDates": "Datas empatadas em primeiro lugar"
+    "tiedDates": "Datas empatadas em primeiro lugar",
+    "confirmDateTitle": "Confirmar esta data?",
+    "confirmDateText": "Todos os participantes vão receber um email com a data escolhida.",
+    "confirmDateAction": "Confirmar e avisar todos",
+    "reopenTitle": "Reabrir a sondagem?",
+    "reopenText": "Todos os participantes vão receber um email e poderão votar novamente.",
+    "cancelText": "Todos os participantes vão receber um email de cancelamento.",
+    "keepEvent": "Manter o evento",
+    "datesChangedTitle": "Guardar as novas datas?",
+    "goBack": "Voltar",
+    "copyFailed": "Não foi possível copiar a ligação. Seleciona-a e copia-a manualmente.",
+    "pageNotFound": "Página não encontrada",
+    "errorTitle": "Algo correu mal"
   },
   "pdf": {
     "invitation": "Carta de convite",

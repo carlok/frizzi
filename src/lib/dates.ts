@@ -7,6 +7,15 @@ export function dateOrder(parts: Intl.DateTimeFormatPart[]): DatePart[] {
         part.type === 'day' || part.type === 'month' || part.type === 'year').map(part => part.type);
 }
 
+/** First day of the week for a regional locale, 0 for Sunday to 6 for Saturday; Monday when the runtime cannot tell. */
+export function firstWeekday(locale: string) {
+    const local = new Intl.Locale(locale) as Intl.Locale & {
+        getWeekInfo?: () => { firstDay: number };
+        weekInfo?: { firstDay: number };
+    };
+    return (local.getWeekInfo?.().firstDay ?? local.weekInfo?.firstDay ?? 1) % 7;
+}
+
 /**
  * Reads a typed date in the field order of the user's locale and returns it as
  * `YYYY-MM-DD`, or `''` when it is not a real calendar date. ISO dates are always
@@ -14,7 +23,7 @@ export function dateOrder(parts: Intl.DateTimeFormatPart[]): DatePart[] {
  * digits (Arabic-Indic, Persian, Bengali, Devanagari) are read as ASCII.
  */
 export function readDate(raw: string, order: DatePart[]): string {
-    const normalized = raw.trim().replace(/[‎‏؜]/g, '').replace(/[٠-٩۰-۹০-৯०-९]/g, digit => {
+    const normalized = raw.replace(/[‎‏؜]/g, '').trim().replace(/[٠-٩۰-۹০-৯०-९]/g, digit => {
         const start = ['٠','۰','০','०'].find(zero => digit >= zero && digit <= String.fromCharCode(zero.charCodeAt(0) + 9))!;
         return String(digit.charCodeAt(0) - start.charCodeAt(0));
     });

@@ -1,7 +1,7 @@
 <script lang="ts">
  import { Bold, Italic, Mail, Send, Underline } from '@lucide/svelte';
  import { Button } from '#lib/components/ui/button/index.ts';
- import { errorText, lang, t } from '#lib/i18n.ts';
+ import { errorText, intlLocale, lang, t } from '#lib/i18n.ts';
 
  export let recipients: number;
  export let send: (message: string, requestId: string) => Promise<{queued: number}>;
@@ -12,7 +12,7 @@
  let queued: number | null = null;
  let error = '';
  let attempt: {message: string; id: string} | undefined;
- $: numbers = new Intl.NumberFormat($lang || 'it');
+ $: numbers = new Intl.NumberFormat(intlLocale($lang));
 
  function format(tag: 'b' | 'i' | 'u') {
    const {selectionStart: start, selectionEnd: end} = field;

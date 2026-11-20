@@ -81,6 +81,7 @@ try{
   assert.deepEqual(Object.keys(dictionary.mail).sort(),Object.keys(italian.mail).sort());
   check(Object.values(dictionary.ui).every(value=>typeof value==='string'&&value.length),'Missing UI translation');
  }
+ check((await fetch(web+'/not-an-event')).status===404&&(await fetch(web+'/favicon.svg')).headers.get('content-type').includes('svg'),'Malformed links are real 404s and the favicon is served');
  await call('/api/events','POST',{...initial,slots:[initial.slots[0],initial.slots[0]]},400);
  await call('/api/events','POST',{...initial,timezone:'invalid/timezone'},400);
  check((await call('/api/places/suggest','POST',{text:'Via Roma Torino'})).enabled===false,'Location lookup is optional');
@@ -389,6 +390,12 @@ try{
  const publicUrl=await page.locator('input[readonly]').inputValue();const browserToken=publicUrl.split('/').at(-1);
  await page.getByRole('button',{name:'Condividi',exact:true}).click();
  check(JSON.parse(await page.evaluate(()=>localStorage.getItem('sharedEvent'))).url===publicUrl,'Share opens the public event only');
+ await page.getByRole('link',{name:'Crea un altro evento',exact:true}).click();
+ await page.getByRole('heading',{name:'Crea il tuo evento',exact:true}).waitFor();
+ check((await Promise.all(['title','location','organizer_name','organizer_email','date-0'].map(name=>page.locator(`[name="${name}"]`).inputValue()))).join('')===''&&await page.locator('[name="date-1"]').count()===0,'Create another starts from an empty form');
+ await page.locator('[name="date-0"]').fill('31/02');await page.getByRole('button',{name:'Aggiungi una data'}).click();
+ await page.getByRole('button',{name:/^Rimuovi/}).first().click();
+ check(await page.locator('[name="date-0"]').inputValue()===''&&await page.locator('[name="date-1"]').count()===0,'Removing a date row leaves no stale draft in the next one');
  const browserAdmin=tokenFrom((await messageFor('browser@example.test')).Text);
  const debugResponse=await fetch(`${api}/api/events/${browserToken}/admin/${browserAdmin}/tiebreak`,{
   method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot_id:randomUUID()})
@@ -448,8 +455,10 @@ try{
  await page.getByRole('button',{name:'Mese precedente',exact:true}).click();
  check(await marchDay.getAttribute('aria-pressed')==='true','Selections survive month navigation');
  await checkboxes.last().uncheck();
+ await page.evaluate(()=>{document.querySelector('.event-header').dataset.mounted='yes';document.addEventListener('click',()=>window.clickScroll=scrollY,{once:true,capture:true});});
  await page.getByRole('button',{name:'Invia disponibilità',exact:true}).click();
  await page.getByRole('status').filter({hasText:'Risposta salvata'}).waitFor();
+ check(await page.evaluate(()=>document.querySelector('.event-header')?.dataset.mounted==='yes'&&window.clickScroll>0&&scrollY>0),'Saving a vote refreshes the results without remounting the page or jumping to the top');
  await until(async()=>{
   const stats=await client.query("SELECT count(*) FROM usage_metrics WHERE (action, outcome) IN (('create_event','ok'),('event_location','suggested'),('vote_selection','both'),('share','native'),('browser_error','invalid_response'))");
   return stats.rows[0].count==='5';
@@ -509,7 +518,11 @@ try{
  await page.getByText('Voto decisivo dell’organizzatore',{exact:true}).waitFor();
  check(await page.getByRole('button',{name:/spareggio/i}).count()===0,'Participants see the deciding vote without organizer controls');
  await page.goto(`${publicUrl}/admin/${browserAdmin}`);
- await page.getByRole('button',{name:'Conferma questa data',exact:true}).first().click();await page.locator('.event-confirmed').waitFor();
+ const confirmDate=page.getByRole('button',{name:'Conferma questa data',exact:true}).first();
+ const confirmDialog=page.getByRole('dialog',{name:'Confermare questa data?'});
+ await confirmDate.click();await confirmDialog.waitFor();await page.keyboard.press('Escape');await confirmDialog.waitFor({state:'hidden'});
+ check((await call('/api/events/'+browserToken)).status==='OPEN'&&await confirmDate.evaluate(button=>button===document.activeElement),'Confirming a date needs the dialog; Escape keeps the poll open and returns focus');
+ await confirmDate.click();await confirmDialog.getByRole('button',{name:'Conferma e avvisa tutti',exact:true}).click();await page.locator('.event-confirmed').waitFor();
  check(await status.getAttribute('data-state')==='confirmed'&&(await status.textContent()).trim()==='Evento confermato','Confirmation has its own status badge');
  check(await page.getByText('Voto decisivo dell’organizzatore',{exact:true}).isVisible(),'Confirmed winner keeps its deciding-vote badge');
  const calendarLink=page.getByRole('link',{name:'Aggiungi al calendario',exact:true});

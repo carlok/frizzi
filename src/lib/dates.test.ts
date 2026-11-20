@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dateOrder, readDate, type DatePart } from './dates.ts';
-import { dateFormatter, languages } from './i18n.ts';
+import { dateOrder, firstWeekday, readDate, type DatePart } from './dates.ts';
+import { dateFormatter, intlLocale, languages } from './i18n.ts';
 
 const example = new Date('2031-04-27T12:00:00Z');
 const orderFor = (language: string) => dateOrder(dateFormatter(language).formatToParts(example));
@@ -17,6 +17,14 @@ describe('dateOrder', () => {
 
     it('ignores literals and other parts', () => {
         expect(dateOrder(dateFormatter('de', true).formatToParts(example))).toEqual(dmy);
+    });
+});
+
+describe('firstWeekday', () => {
+    it('starts English weeks on Monday, like its British date format', () => {
+        expect(firstWeekday('en-US')).toBe(0);
+        expect(firstWeekday(intlLocale('en'))).toBe(1);
+        expect(firstWeekday(intlLocale('it'))).toBe(1);
     });
 });
 
@@ -73,6 +81,11 @@ describe('readDate', () => {
 
     it('drops bidirectional marks', () => {
         expect(readDate('‏27‏/04‎/2031؜', dmy)).toBe('2031-04-27');
+    });
+
+    it('trims whitespace hidden behind bidirectional marks', () => {
+        expect(readDate('‏ 27/04/2031', dmy)).toBe('2031-04-27');
+        expect(readDate('27/04/2031 ‎', dmy)).toBe('2031-04-27');
     });
 
     it('rejects days that do not exist', () => {

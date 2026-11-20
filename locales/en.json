@@ -128,7 +128,19 @@
     "tiebreakBadge": "Organizer’s deciding vote",
     "tiebreakUndo": "Undo tiebreak",
     "tiebreakUnavailable": "The leading dates have changed. Check the updated results.",
-    "tiedDates": "Dates tied for first"
+    "tiedDates": "Dates tied for first",
+    "confirmDateTitle": "Confirm this date?",
+    "confirmDateText": "Every participant will get an email with the chosen date.",
+    "confirmDateAction": "Confirm and notify everyone",
+    "reopenTitle": "Reopen the poll?",
+    "reopenText": "Every participant will get an email and can vote again.",
+    "cancelText": "Every participant will get a cancellation email.",
+    "keepEvent": "Keep event",
+    "datesChangedTitle": "Save the new dates?",
+    "goBack": "Go back",
+    "copyFailed": "Couldn’t copy the link. Select it and copy it manually.",
+    "pageNotFound": "Page not found",
+    "errorTitle": "Something went wrong"
   },
   "pdf": {
     "invitation": "Your invitation",

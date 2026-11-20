@@ -1,6 +1,7 @@
 <script lang="ts">
  import { ChevronLeft, ChevronRight } from '@lucide/svelte';
- import { formatDate, formatTime, lang, t } from '#lib/i18n.ts';
+ import { formatDate, formatTime, intlLocale, lang, t } from '#lib/i18n.ts';
+ import { firstWeekday } from '#lib/dates.ts';
  import type { Slot } from '#lib/types.ts';
 
  export let slots: Slot[];
@@ -10,14 +11,6 @@
  export let interactive = true;
  export let busy = false;
  export let choose: (id: string) => void;
-
- function firstWeekday(locale: string) {
-   const local = new Intl.Locale(locale) as Intl.Locale & {
-     getWeekInfo?: () => { firstDay: number };
-     weekInfo?: { firstDay: number };
-   };
-   return (local.getWeekInfo?.().firstDay ?? local.weekInfo?.firstDay ?? 1) % 7;
- }
 
  function monthDays(month: string, firstDay: number) {
    const date = new Date(`${month}-01T12:00:00Z`);
@@ -30,7 +23,8 @@
    });
  }
 
- $: locale = $lang || 'it';
+ $: language = $lang || 'it';
+ $: locale = intlLocale(language);
  $: months = [...new Set(slots.map(slot => slot.date.slice(0, 7)))].sort();
  $: shownMonth = months.includes(month) ? month : months[0];
  $: monthIndex = months.indexOf(shownMonth);
@@ -65,7 +59,7 @@
     {@const confirmed = slot?.id === confirmedId}
     {@const dayNumber = day ? numbers.format(Number(day.slice(-2))) : ''}
     {#if day && slot}
-     {@const label = `${formatDate(day,locale)} · ${formatTime(slot.start,locale)}${slot.end ? ' – '+formatTime(slot.end,locale) : ''}${confirmed ? ' · '+$t.confirmedDate : ''}`}
+     {@const label = `${formatDate(day,language)} · ${formatTime(slot.start,language)}${slot.end ? ' – '+formatTime(slot.end,language) : ''}${confirmed ? ' · '+$t.confirmedDate : ''}`}
      {#if interactive}
       <button type="button" class="calendar-day proposed" class:marked={pressed} class:confirmed
         data-calendar-date={day} aria-label={label} aria-pressed={pressed} title={label} disabled={busy}
