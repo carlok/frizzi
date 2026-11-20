@@ -272,14 +272,41 @@ struct Composed {
     html: String,
 }
 
-fn compose(
-    lang: &str,
-    kind: MailKind,
-    title: &str,
-    url: &str,
-    details: Option<&Details>,
-    intro: Option<&str>,
-) -> Composed {
+/// What an email says, before it is addressed to anyone.
+pub struct Email<'a> {
+    pub lang: &'a str,
+    pub kind: MailKind,
+    /// The event title.
+    pub title: &'a str,
+    /// The recipient's private link, behind the main button.
+    pub url: &'a str,
+    pub details: Option<&'a Details>,
+    /// Replaces the kind's standard opening sentence.
+    pub intro: Option<&'a str>,
+}
+
+impl<'a> Email<'a> {
+    pub fn new(lang: &'a str, kind: MailKind, title: &'a str, url: &'a str) -> Self {
+        Self {
+            lang,
+            kind,
+            title,
+            url,
+            details: None,
+            intro: None,
+        }
+    }
+}
+
+fn compose(email: &Email) -> Composed {
+    let Email {
+        lang,
+        kind,
+        title,
+        url,
+        details,
+        intro,
+    } = *email;
     let subject_key = format!("mail.{}Subject", kind.as_str());
     let body_key = format!("mail.{}Body", kind.as_str());
     let headline = rust_i18n::t!(&subject_key, locale = lang);
@@ -292,44 +319,47 @@ fn compose(
         MailKind::Admin | MailKind::Recover | MailKind::Message => "🔑",
     };
     let default_intro = rust_i18n::t!(&body_key, locale = lang);
-    let intro = intro.unwrap_or(&default_intro);
+    let content = template::Content {
+        lang,
+        kind,
+        headline: &headline,
+        title,
+        intro: intro.unwrap_or(&default_intro),
+        url,
+        details,
+        message: None,
+    };
     Composed {
         subject: format!("{icon} {headline} · {}", title.replace(['\r', '\n'], " ")),
-        body: template::plain(lang, kind, &headline, title, intro, url, details, None),
-        html: template::html(lang, kind, &headline, title, intro, url, details, None),
+        body: template::plain(&content),
+        html: template::html(&content),
     }
 }
 
+/// Queues one email to `to` about `event`, sent once the transaction commits.
 pub async fn enqueue(
     tx: &mut Transaction<'_, Postgres>,
     event: Uuid,
     to: &str,
-    lang: &str,
-    kind: MailKind,
-    title: &str,
-    url: &str,
-    details: Option<&Details>,
-    intro: Option<&str>,
-    invitation: Option<Uuid>,
+    email: Email<'_>,
 ) -> Result<(), ApiError> {
     let Composed {
         subject,
         body,
         html,
-    } = compose(lang, kind, title, url, details, intro);
+    } = compose(&email);
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO email_outbox (recipient,subject,body,html,event_id,invitation_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+        "INSERT INTO email_outbox (recipient,subject,body,html,event_id) VALUES ($1,$2,$3,$4,$5) RETURNING id",
     )
     .bind(to)
     .bind(subject)
     .bind(body)
     .bind(html)
     .bind(event)
-    .bind(invitation)
     .fetch_one(&mut **tx)
     .await
     .map_err(db)?;
-    tracing::info!(event = "email_prepared", mail_id = %id, kind = kind.as_str());
+    tracing::info!(event = "email_prepared", mail_id = %id, kind = email.kind.as_str());
     Ok(())
 }
 
@@ -349,17 +379,30 @@ pub async fn enqueue_participant_message(
             .map_err(db)?;
     let url = format!("{}/{public}", base_url());
     let clean_title = title.replace(['\r', '\n'], " ");
-    let payloads: Vec<_> = languages.iter().map(|original| {
-        let lang = locale(original);
-        let headline = rust_i18n::t!("mail.messageSubject", locale = lang);
-        let intro = rust_i18n::t!("mail.messageBody", locale = lang);
-        serde_json::json!({
-            "locale": original,
-            "subject": format!("💌 {headline} · {clean_title}"),
-            "body": template::plain(lang, MailKind::Message, &headline, title, &intro, &url, None, Some(&message)),
-            "html": template::html(lang, MailKind::Message, &headline, title, &intro, &url, None, Some(&message)),
+    let payloads: Vec<_> = languages
+        .iter()
+        .map(|original| {
+            let lang = locale(original);
+            let headline = rust_i18n::t!("mail.messageSubject", locale = lang);
+            let intro = rust_i18n::t!("mail.messageBody", locale = lang);
+            let content = template::Content {
+                lang,
+                kind: MailKind::Message,
+                headline: &headline,
+                title,
+                intro: &intro,
+                url: &url,
+                details: None,
+                message: Some(&message),
+            };
+            serde_json::json!({
+                "locale": original,
+                "subject": format!("💌 {headline} · {clean_title}"),
+                "body": template::plain(&content),
+                "html": template::html(&content),
+            })
         })
-    }).collect();
+        .collect();
     let result = sqlx::query(
         "INSERT INTO email_outbox (event_id,recipient,subject,body,html)
          SELECT p.event_id,p.email,m.subject,m.body,m.html FROM participants p
@@ -373,7 +416,20 @@ pub async fn enqueue_participant_message(
     .map_err(db)?;
     Ok(result.rows_affected())
 }
-type Changes<'a> = Option<(&'a [(String, String, String)], &'a [SlotInput], bool)>;
+/// One edited field: `key` names its `ui.<key>` label, `before` and `after` are its values.
+pub struct Change {
+    pub key: &'static str,
+    pub before: String,
+    pub after: String,
+}
+
+/// What an edit of the event details changed, listed in the notification.
+pub struct Changes<'a> {
+    pub fields: &'a [Change],
+    /// The dates as they were, shown when `dates_changed`.
+    pub before_slots: &'a [SlotInput],
+    pub dates_changed: bool,
+}
 
 struct Recipient {
     email: String,
@@ -398,7 +454,7 @@ pub async fn notify(
     tx: &mut Transaction<'_, Postgres>,
     event: Uuid,
     kind: MailKind,
-    changes: Changes<'_>,
+    changes: Option<&Changes<'_>>,
     confirmation: Option<&ConfirmationExtras>,
 ) -> Result<(), ApiError> {
     let e = sqlx::query("SELECT public_token,admin_token,title,organizer_name,organizer_email,organizer_locale,location_geo FROM events WHERE id=$1")
@@ -460,21 +516,29 @@ pub async fn notify(
             } else {
                 None
             };
-            if let Some((changes, before_slots, dates_changed)) = changes {
-                details.notes = change_notes(changes, before_slots, dates_changed, lang);
+            if let Some(changes) = changes {
+                details.notes = change_notes(changes, lang);
             }
             languages.insert(lang, (details, invitation_id));
         }
         let (details, invitation_id) = &languages[lang];
-        let message = match &recipient.response {
+        let with_response;
+        let details = match &recipient.response {
             // Only an organizer who also voted needs a second link; copy the shared details.
             Some(response) => {
-                let mut details = details.clone();
-                details.response = Some(response.clone());
-                compose(lang, kind, &title, &recipient.url, Some(&details), intro)
+                with_response = Details {
+                    response: Some(response.clone()),
+                    ..details.clone()
+                };
+                &with_response
             }
-            None => compose(lang, kind, &title, &recipient.url, Some(details), intro),
+            None => details,
         };
+        let message = compose(&Email {
+            details: Some(details),
+            intro,
+            ..Email::new(lang, kind, &title, &recipient.url)
+        });
         messages.push(serde_json::json!({
             "recipient": recipient.email,
             "subject": message.subject,
@@ -501,14 +565,15 @@ pub async fn notify(
     Ok(())
 }
 
-fn change_notes(
-    changes: &[(String, String, String)],
-    before_slots: &[SlotInput],
-    dates_changed: bool,
-    lang: &str,
-) -> String {
+fn change_notes(changes: &Changes, lang: &str) -> String {
+    let Changes {
+        fields,
+        before_slots,
+        dates_changed,
+    } = *changes;
     let mut notes = format!("{}\n", rust_i18n::t!("mail.changes", locale = lang));
-    for (key, before, after) in changes {
+    for Change { key, before, after } in fields {
+        let key = *key;
         let label_key = format!("ui.{key}");
         let label = rust_i18n::t!(&label_key, locale = lang);
         let value = |v: &str| -> String {
@@ -538,7 +603,7 @@ fn change_notes(
             format_slots(before_slots, lang)
         ));
     }
-    if dates_changed || changes.iter().any(|(key, _, _)| key == "timezone") {
+    if dates_changed || fields.iter().any(|change| change.key == "timezone") {
         notes.push_str(&format!(
             "\n{}\n",
             rust_i18n::t!("ui.datesChangedHint", locale = lang)
@@ -933,12 +998,25 @@ mod tests {
 
     #[test]
     fn change_notes_localize_values_and_flag_schedule_changes() {
+        let change = |key, before: &str, after: &str| Change {
+            key,
+            before: before.into(),
+            after: after.into(),
+        };
+        let notes = |fields: &[Change], before_slots: &[SlotInput], dates_changed| {
+            let changes = Changes {
+                fields,
+                before_slots,
+                dates_changed,
+            };
+            change_notes(&changes, "en")
+        };
         let changes = [
-            ("multiple".into(), "true".into(), "false".into()),
-            ("votingDeadline".into(), "2027-01-31".into(), String::new()),
+            change("multiple", "true", "false"),
+            change("votingDeadline", "2027-01-31", ""),
         ];
         assert_eq!(
-            change_notes(&changes, &[], false, "en"),
+            notes(&changes, &[], false),
             "What changed\nAllow multiple dates per person\nBefore: Yes\nAfter: No\n\
              Voting deadline\nBefore: 31/01/2027\nAfter: —\n"
         );
@@ -950,27 +1028,25 @@ mod tests {
             end: None,
         }];
         assert_eq!(
-            change_notes(&[], &slots, true, "en"),
+            notes(&[], &slots, true),
             format!(
                 "What changed\n\nBefore:\n{}\n\n{hint}\n",
                 format_slots(&slots, "en")
             )
         );
-        let timezone = [("timezone".into(), "Europe/Rome".into(), "UTC".into())];
-        assert!(change_notes(&timezone, &[], false, "en").ends_with(&format!("\n{hint}\n")));
-        assert!(!change_notes(&changes, &[], false, "en").contains(hint.as_ref()));
+        let timezone = [change("timezone", "Europe/Rome", "UTC")];
+        assert!(notes(&timezone, &[], false).ends_with(&format!("\n{hint}\n")));
+        assert!(!notes(&changes, &[], false).contains(hint.as_ref()));
     }
 
     #[test]
     fn composed_subject_has_icon_and_single_line_title() {
-        let message = compose(
+        let message = compose(&Email::new(
             "en",
             MailKind::Changed,
             "Dinner\r\nparty",
             "https://x.test/a",
-            None,
-            None,
-        );
+        ));
         let headline = rust_i18n::t!("mail.changedSubject", locale = "en");
         assert_eq!(message.subject, format!("📣 {headline} · Dinner  party"));
         assert!(message.body.contains("https://x.test/a"));

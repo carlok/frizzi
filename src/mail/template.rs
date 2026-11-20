@@ -83,16 +83,29 @@ impl Details {
     }
 }
 
-pub fn plain(
-    lang: &str,
-    kind: MailKind,
-    headline: &str,
-    title: &str,
-    intro: &str,
-    url: &str,
-    details: Option<&Details>,
-    message: Option<&MessageText>,
-) -> String {
+/// Everything a rendered email shows apart from its subject line.
+pub struct Content<'a> {
+    pub lang: &'a str,
+    pub kind: MailKind,
+    pub headline: &'a str,
+    pub title: &'a str,
+    pub intro: &'a str,
+    pub url: &'a str,
+    pub details: Option<&'a Details>,
+    pub message: Option<&'a MessageText>,
+}
+
+pub fn plain(content: &Content) -> String {
+    let Content {
+        lang,
+        kind,
+        headline,
+        title,
+        intro,
+        url,
+        details,
+        message,
+    } = *content;
     let mut body = String::new();
     if kind == MailKind::Confirmed {
         let _ = writeln!(body, "{headline}");
@@ -244,16 +257,17 @@ fn facts(lang: &str, d: &Details) -> String {
     )
 }
 
-pub fn html(
-    lang: &str,
-    kind: MailKind,
-    headline: &str,
-    title: &str,
-    intro: &str,
-    url: &str,
-    details: Option<&Details>,
-    message: Option<&MessageText>,
-) -> String {
+pub fn html(content: &Content) -> String {
+    let Content {
+        lang,
+        kind,
+        headline,
+        title,
+        intro,
+        url,
+        details,
+        message,
+    } = *content;
     let (banner, accent, icon) = match kind {
         MailKind::Confirmed => ("#d9f59d", "#fff0b2", "🎉"),
         MailKind::Cancelled => ("#f7e2e1", "#f7e2e1", ""),
@@ -429,16 +443,16 @@ mod tests {
             response: None,
         };
         let message = MessageText::parse(&format!("<b>Hey</b> {script}")).unwrap();
-        let page = html(
-            "en",
-            MailKind::Message,
-            &format!("Head {script}"),
-            &format!("Title {script}"),
-            "Intro \"quoted\"",
-            "https://frizzi.test/abc?x=\"y\"",
-            Some(&details),
-            Some(&message),
-        );
+        let page = html(&Content {
+            lang: "en",
+            kind: MailKind::Message,
+            headline: &format!("Head {script}"),
+            title: &format!("Title {script}"),
+            intro: "Intro \"quoted\"",
+            url: "https://frizzi.test/abc?x=\"y\"",
+            details: Some(&details),
+            message: Some(&message),
+        });
         assert!(!page.contains("<script"), "{page}");
         assert!(!page.contains(r#""onmouseover"#));
         let escaped = "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;";
@@ -449,16 +463,16 @@ mod tests {
         assert!(page.contains("Intro &quot;quoted&quot;"));
         assert!(page.contains(r#"href="https://frizzi.test/abc?x=&quot;y&quot;""#));
 
-        let text = plain(
-            "en",
-            MailKind::Message,
-            "Head",
-            "Title",
-            "Intro",
-            "https://frizzi.test/abc",
-            Some(&details),
-            Some(&message),
-        );
+        let text = plain(&Content {
+            lang: "en",
+            kind: MailKind::Message,
+            headline: "Head",
+            title: "Title",
+            intro: "Intro",
+            url: "https://frizzi.test/abc",
+            details: Some(&details),
+            message: Some(&message),
+        });
         assert!(text.contains(&format!("Hey {script}")), "{text}");
         assert!(text.contains(&format!("Note {script}")));
     }

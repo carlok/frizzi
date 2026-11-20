@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::error::{bad, db, error, missing, unique_or_db, ApiError, ApiResult};
 use crate::limits::{per_ip, rate_limits, ClientIp, VOTES_PER_IP, VOTES_PER_PARTICIPANT};
-use crate::mail::MailKind;
+use crate::mail::{Email, MailKind};
 use crate::status::Status;
 use crate::validate::{deadline_passed, default_locale, email, locale, valid, valid_token};
 use crate::{mail, schedule_mail, Runtime};
@@ -130,19 +130,13 @@ async fn save_vote(
         }
     }
     let summary = mail::summary(&mut tx, id, locale(&v.locale)).await?;
-    mail::enqueue(
-        &mut tx,
-        id,
-        &email,
-        locale(&v.locale),
-        MailKind::Vote,
-        &event.get::<String, _>("title"),
-        &format!("{}/{public}/{edit_token}", mail::base_url()),
-        Some(&summary),
-        None,
-        None,
-    )
-    .await?;
+    let title: String = event.get("title");
+    let url = format!("{}/{public}/{edit_token}", mail::base_url());
+    let receipt = Email {
+        details: Some(&summary),
+        ..Email::new(locale(&v.locale), MailKind::Vote, &title, &url)
+    };
+    mail::enqueue(&mut tx, id, &email, receipt).await?;
     tx.commit().await.map_err(db)?;
     Ok(Json(json!({"ok": true})))
 }

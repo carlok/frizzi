@@ -20,7 +20,7 @@ use crate::limits::{
     limit_notifications, per_ip, rate_limit, rate_limits, ClientIp, DETAILS_WRITES_PER_EVENT,
     MESSAGES_PER_EVENT, MESSAGES_PER_IP, STATUS_WRITES_PER_EVENT,
 };
-use crate::mail::MailKind;
+use crate::mail::{Change, Changes, MailKind};
 use crate::places::LocationGeo;
 use crate::slots::{insert_slots, SlotInput};
 use crate::status::Status;
@@ -342,7 +342,7 @@ pub(super) async fn update_details(
     if (deadline != old_deadline || dates_changed) && !deadline_within_slots(deadline, &v.slots) {
         return Err(error(StatusCode::BAD_REQUEST, "invalid_deadline"));
     }
-    let mut changes: Vec<(String, String, String)> = Vec::new();
+    let mut changes: Vec<Change> = Vec::new();
     for (key, before, after) in [
         ("title", old.title, v.title.trim().to_string()),
         (
@@ -375,21 +375,21 @@ pub(super) async fn update_details(
         ),
     ] {
         if before != after {
-            changes.push((key.into(), before, after));
+            changes.push(Change { key, before, after });
         }
     }
     if old_location == v.location.trim() && geo != old_geo {
-        changes.push((
-            "location".into(),
-            old_geo.as_ref().map_or_else(
+        changes.push(Change {
+            key: "location",
+            before: old_geo.as_ref().map_or_else(
                 || old_location.clone(),
                 |geo| geo.with_coordinates(&old_location),
             ),
-            geo.as_ref().map_or_else(
+            after: geo.as_ref().map_or_else(
                 || old_location.clone(),
                 |geo| geo.with_coordinates(&old_location),
             ),
-        ));
+        });
     }
     let notify = dates_changed || !changes.is_empty();
     if notify {
@@ -437,14 +437,12 @@ pub(super) async fn update_details(
         .bind(v.title.trim()).bind(&v.description).bind(v.location.trim()).bind(v.organizer_name.trim()).bind(v.allow_multiple_choices)
         .bind(&v.timezone).bind(locale(&v.locale)).bind(deadline).bind(geo.map(sqlx::types::Json)).bind(id).execute(&mut *tx).await.map_err(db)?;
     if notify {
-        mail::notify(
-            &mut tx,
-            id,
-            MailKind::Changed,
-            Some((&changes, &old_slots, dates_changed)),
-            None,
-        )
-        .await?;
+        let changes = Changes {
+            fields: &changes,
+            before_slots: &old_slots,
+            dates_changed,
+        };
+        mail::notify(&mut tx, id, MailKind::Changed, Some(&changes), None).await?;
     }
     tx.commit().await.map_err(db)?;
     schedule_mail(pool, runtime);

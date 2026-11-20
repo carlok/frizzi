@@ -16,13 +16,19 @@ pub(crate) struct SlotInput {
     pub(crate) end: Option<NaiveTime>,
 }
 
-type SlotColumns = (Vec<NaiveDate>, Vec<NaiveTime>, Vec<Option<NaiveTime>>);
+/// Slots split into one array per column, for a single `UNNEST` insert.
+#[derive(Debug, Default, PartialEq)]
+struct SlotColumns {
+    dates: Vec<NaiveDate>,
+    starts: Vec<NaiveTime>,
+    ends: Vec<Option<NaiveTime>>,
+}
 fn slot_columns<'a>(slots: impl IntoIterator<Item = &'a SlotInput>) -> SlotColumns {
-    let mut columns: SlotColumns = Default::default();
+    let mut columns = SlotColumns::default();
     for s in slots {
-        columns.0.push(s.date);
-        columns.1.push(s.start);
-        columns.2.push(s.end);
+        columns.dates.push(s.date);
+        columns.starts.push(s.start);
+        columns.ends.push(s.end);
     }
     columns
 }
@@ -31,7 +37,11 @@ pub(crate) async fn insert_slots<'a>(
     event_id: Uuid,
     slots: impl IntoIterator<Item = &'a SlotInput>,
 ) -> Result<(), ApiError> {
-    let (dates, starts, ends) = slot_columns(slots);
+    let SlotColumns {
+        dates,
+        starts,
+        ends,
+    } = slot_columns(slots);
     if dates.is_empty() {
         return Ok(());
     }
@@ -70,7 +80,11 @@ mod tests {
                 end: None,
             },
         ];
-        let (dates, starts, ends) = slot_columns(&slots);
+        let SlotColumns {
+            dates,
+            starts,
+            ends,
+        } = slot_columns(&slots);
         assert_eq!(dates, [slots[0].date, slots[1].date]);
         assert_eq!(starts, [time(20), time(19)]);
         assert_eq!(ends, [Some(time(22)), None]);

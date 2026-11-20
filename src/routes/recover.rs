@@ -15,7 +15,7 @@ use crate::limits::{
     per_ip, rate_limit, rate_limits, ClientIp, RECOVERY_PER_EMAIL, RECOVERY_PER_EVENT,
     RECOVERY_PER_IP,
 };
-use crate::mail::MailKind;
+use crate::mail::{Email, MailKind};
 use crate::validate::{email, locale, valid_token};
 use crate::{mail, schedule_mail, Runtime};
 
@@ -78,19 +78,9 @@ pub(super) async fn recover_links(
         let token: String = row.get("token");
         let role = if row.get("organizer") { "admin/" } else { "" };
         let url = format!("{}/{public}/{role}{token}", mail::base_url());
-        mail::enqueue(
-            &mut tx,
-            event_id,
-            &address,
-            locale(&row.get::<String, _>("locale")),
-            MailKind::Recover,
-            &row.get::<String, _>("title"),
-            &url,
-            None,
-            None,
-            None,
-        )
-        .await?;
+        let (lang, title): (String, String) = (row.get("locale"), row.get("title"));
+        let email = Email::new(locale(&lang), MailKind::Recover, &title, &url);
+        mail::enqueue(&mut tx, event_id, &address, email).await?;
     }
     tx.commit().await.map_err(db)?;
     if !matches.is_empty() {

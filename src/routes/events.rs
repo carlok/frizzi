@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::error::{bad, db, error, missing, ApiResult};
 use crate::limits::{per_ip, rate_limits, ClientIp, CREATE_PER_IP, CREATE_PER_ORGANIZER};
-use crate::mail::MailKind;
+use crate::mail::{Email, MailKind};
 use crate::places::LocationGeo;
 use crate::slots::{insert_slots, SlotInput};
 use crate::status::Status;
@@ -83,19 +83,9 @@ pub(super) async fn create(
         .bind(e.organizer_name.trim()).bind(&organizer_email).bind(locale(&e.locale))
         .bind(e.allow_multiple_choices).bind(&e.timezone).bind(e.voting_deadline).bind(e.location_geo.map(sqlx::types::Json)).fetch_one(&mut *tx).await.map_err(db)?;
     insert_slots(&mut tx, id, &e.slots).await?;
-    mail::enqueue(
-        &mut tx,
-        id,
-        &organizer_email,
-        locale(&e.locale),
-        MailKind::Admin,
-        &e.title,
-        &format!("{}/{public}/admin/{secret}", mail::base_url()),
-        None,
-        None,
-        None,
-    )
-    .await?;
+    let url = format!("{}/{public}/admin/{secret}", mail::base_url());
+    let email = Email::new(locale(&e.locale), MailKind::Admin, &e.title, &url);
+    mail::enqueue(&mut tx, id, &organizer_email, email).await?;
     tx.commit().await.map_err(db)?;
     schedule_mail(pool, runtime);
     Ok(Json(json!({"public_token": public})))
