@@ -53,6 +53,7 @@ impl MessageText {
     }
 }
 
+#[derive(Clone)]
 pub struct Details {
     pub description: Option<String>,
     pub location: String,
@@ -62,6 +63,8 @@ pub struct Details {
     pub confirmed: bool,
     pub website: Option<Url>,
     pub calendar: Option<String>,
+    /// The participant link of an organizer who also answered the poll with the same address.
+    pub response: Option<String>,
     pub notes: String,
 }
 
@@ -124,6 +127,13 @@ pub fn plain(
                 body,
                 "\n{}: {calendar}",
                 rust_i18n::t!("ui.addCalendar", locale = lang)
+            );
+        }
+        if let Some(response) = &d.response {
+            let _ = writeln!(
+                body,
+                "\n{}: {response}",
+                rust_i18n::t!("ui.edit", locale = lang)
             );
         }
         if !d.notes.is_empty() {
@@ -190,6 +200,16 @@ fn facts(lang: &str, d: &Details) -> String {
             )
         })
         .unwrap_or_default();
+    let response = d
+        .response
+        .as_ref()
+        .map(|url| {
+            format!(
+                r#"<p style="margin:14px 0 0">{}</p>"#,
+                link(&rust_i18n::t!("ui.edit", locale = lang), url)
+            )
+        })
+        .unwrap_or_default();
     let notes = if d.notes.is_empty() {
         String::new()
     } else {
@@ -209,7 +229,7 @@ fn facts(lang: &str, d: &Details) -> String {
     <strong style="font-size:14px">📍 {location_label}</strong><br>{location}<br>{directions}{website}
   </td></tr>
 </table>
-{calendar}{notes}"##,
+{calendar}{response}{notes}"##,
         date_label = escape(&d.date_label(lang)),
         dates = lines(&d.dates),
         timezone = escape(&format!(
@@ -399,6 +419,7 @@ mod tests {
             website: None,
             calendar: Some(r#"https://x.test/cal.ics?"onmouseover=alert(1)"#.into()),
             notes: format!("Note {script}\n"),
+            response: None,
         };
         let message = MessageText::parse(&format!("<b>Hey</b> {script}")).unwrap();
         let page = html(

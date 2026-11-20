@@ -17,7 +17,7 @@ init({ fallbackLocale:'it', initialLocale:'it' });
 export const lang = locale;
 export const t = derived(format, $format => Object.fromEntries(Object.keys(it.ui).map(key=>[key,$format(`ui.${key}`)])) as typeof it.ui);
 export function errorText(code: string, messages: typeof it.ui): string {
-    const keys: Record<string,keyof typeof it.ui> = { invalid_input:'invalidInput', email_exists:'emailExists', not_found:'notFound', multiple_votes_exist:'multipleVotesExist', rate_limited:'rateLimited', event_closed:'eventClosed', invalid_deadline:'invalidDeadline', deadline_passed:'deadlinePassed', tiebreak_unavailable:'tiebreakUnavailable', service_unavailable:'serviceUnavailable' };
+    const keys: Record<string,keyof typeof it.ui> = { invalid_input:'invalidInput', email_exists:'emailExists', not_found:'notFound', multiple_votes_exist:'multipleVotesExist', rate_limited:'rateLimited', event_closed:'eventClosed', invalid_deadline:'invalidDeadline', invalid_dates:'invalidDates', deadline_passed:'deadlinePassed', tiebreak_unavailable:'tiebreakUnavailable', service_unavailable:'serviceUnavailable' };
     const [kind, reference] = code.split(':', 2);
     const message = messages[keys[kind] || 'error'];
     return reference && /^[a-f0-9-]{36}$/.test(reference) ? `${message} ${messages.supportCode} ${reference}` : message;

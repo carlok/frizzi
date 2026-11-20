@@ -107,7 +107,7 @@ async function messageFor(address,subject=''){
  return (await fetch(`${mail}/api/v1/message/${entry.ID}`)).json();
 }
 async function queueDrained(){
- await until(async()=>(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL')).rows[0].count==='0','Email queue did not drain');
+ await until(async()=>(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL')).rows[0].count==='0','Email queue did not drain');
 }
 const tokenPattern=new RegExp(web.replace(/[.*+?^$()|[\]\\{}]/g,'\\$&')+'/[\\w-]{21}(?:/admin)?/([\\w-]{21})');
 function tokenFrom(text){return text.match(tokenPattern)[1];}
@@ -154,6 +154,10 @@ try{
  const earlyDeadline=await call('/api/events','POST',{...initial,voting_deadline:'2000-01-01'},400);
  check(earlyDeadline.error==='invalid_deadline','A new deadline cannot be in the past');
  await call('/api/events','POST',{...initial,slots:[{...initial.slots[0],end:'19:00'}]},400);
+ for(const date of ['2000-01-01','2099-01-01'])check((await call('/api/events','POST',{...initial,slots:[{...initial.slots[0],date}]},400)).error==='invalid_dates',`Proposed date ${date} is out of range`);
+ check((await call('/api/events','POST',{...initial,voting_deadline:'2030-02-05'},400)).error==='invalid_deadline','Voting cannot close after the last proposed date');
+ const blank=await call('/api/events','POST',{...initial,description:' \n\t ',organizer_email:'blank@example.test'});
+ check((await call(`/api/events/${blank.public_token}`)).description===null,'A blank description is stored as none');
  for(const locale of locales.filter(code=>code!=='it')){
   const address=`locale-${locale}@example.test`;
   const result=await call('/api/events','POST',{...initial,organizer_email:address,locale});
@@ -249,6 +253,7 @@ try{
  check(calendarResponse.ok && calendarResponse.headers.get('content-type').startsWith('text/calendar'),'Calendar download');
  check(ical.includes('DTSTART:20300203T190000Z') && ical.includes('DTEND:20300203T210000Z'),'Calendar preserves the event time zone');
  check(!ical.includes(adminToken) && !ical.includes(editToken),'Calendar contains no private links');
+ check(ical.includes('\r\nMETHOD:PUBLISH\r\n')&&ical.includes(`\r\nUID:${publicToken}@frizzi\r\n`)&&/\r\nSEQUENCE:\d+\r\n/.test(ical),'Calendar is a publishable revision with a stable UID');
  const confirmation=await messageFor(v.email,'🎉 ¡Ya tenemos fecha!');
  const confirmedMail=confirmation.Text;
  check(confirmedMail.includes(eventPath+'/calendar.ics'),'Calendar URL in confirmation email');
@@ -282,7 +287,7 @@ try{
  await call(statusPath,'PUT',{status:'OPEN',confirmed_slot_id:null,locale:'it'});
  check((await messageFor(v.email,'Encuesta reabierta')).Subject.includes('🗳️'),'Reopening notification');
  await queueDrained();
- const pending=(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL')).rows[0].count;
+ const pending=(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL')).rows[0].count;
  check(pending==='0','Email queue drained');
  check((await client.query("SELECT count(*) FROM email_outbox WHERE sent_at IS NOT NULL AND (body<>'' OR html IS NOT NULL OR recipient<>'')")).rows[0].count==='0','Delivered secrets removed from both formats in the outbox');
  const unauthorized=await fetch(api+'/api/cron/email');check(unauthorized.status===401,'Cron requires secret');
@@ -318,10 +323,13 @@ try{
  start(mailpitPath,[],mailpitEnv);
  await waitFor(mail+'/api/v1/messages');
  await client.query("INSERT INTO email_outbox (recipient,subject,body) VALUES ('legacy@example.test','Pending before upgrade','Plain text')");
+ await client.query("INSERT INTO email_outbox (recipient,subject,body,html) VALUES ('no-at-sign.example.test','Rejected','Private text','Private HTML')");
  await client.query('UPDATE email_outbox SET available_at=now() WHERE sent_at IS NULL');
  const retried=await fetch(api+'/api/cron/email',{headers:{Authorization:`Bearer ${cronSecret}`}});check(retried.ok,'Retry worker');
  check((await messageFor('retry@example.test')).Text.includes('/admin/'),'Private link delivered after retry');
  check((await messageFor('legacy@example.test')).Text.trim()==='Plain text','Queued plain text from before the upgrade still delivers');
+ await until(async()=>(await client.query("SELECT count(*) FROM email_outbox WHERE subject='' AND failed_at IS NOT NULL AND sent_at IS NULL AND attempts=1 AND recipient='' AND body='' AND html IS NULL")).rows[0].count==='1','A rejected message fails at once and is scrubbed');
+ check(true,'Permanent delivery failures are terminal and drop private content');
  const updateMail=await messageFor(v.email,'💌 ¡Una novedad para ti!');
  check(updateMail.HTML.includes('<b>Ci vediamo!</b>')&&updateMail.HTML.includes('<i>A presto</i>'),'Participant message preserves allowed formatting');
  check(updateMail.HTML.includes('&lt;img')&&!updateMail.HTML.includes('<img'),'Participant message escapes unsupported HTML');
@@ -357,7 +365,10 @@ try{
  check((await call(retentionPath)).status==='CONFIRMED','Confirmed event remains visible on the entire tenth calendar day');
  check((await client.query("SELECT count(*) FROM usage_metrics WHERE action='old_metric'")).rows[0].count==='0','Usage counters rotate after ten UTC calendar days');
  await client.query("UPDATE event_slots SET slot_date=(now() AT TIME ZONE 'Europe/Rome')::date-11 WHERE id=$1",[retentionSlots[0].id]);
+ const {id:unknownZone}=(await client.query("INSERT INTO events (public_token,admin_token,title,location,organizer_name,organizer_email,timezone) VALUES ('unknown-zone-public-0','unknown-zone-admin-00','Old','Roma','Ada','zone@example.test','Mars/City') RETURNING id")).rows[0];
+ await client.query("INSERT INTO event_slots (event_id,slot_date,start_time) VALUES ($1,current_date-30,'20:00')",[unknownZone]);
  check((await fetch(api+'/api/cron/email',{headers:{Authorization:`Bearer ${cronSecret}`}})).ok,'Retention runs from the protected cron');
+ check((await client.query('SELECT count(*) FROM events WHERE id=$1',[unknownZone])).rows[0].count==='0','A zone unknown to PostgreSQL falls back to UTC instead of blocking retention');
  await call(retentionPath,'GET',undefined,404);
  check((await call('/api/events/'+single.public_token)).slots.length===2,'Open event uses its latest proposal for retention');
  const remaining=(await client.query(`SELECT
@@ -600,11 +611,17 @@ try{
  await confirmedDay.waitFor();
  check(await page.locator('button[data-calendar-date]').count()===0,'Closed participant calendar shows saved and confirmed dates in read-only mode');
  check(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Calendar layout fits narrow mobile screens');
+ await call(`/api/events/${single.public_token}/votes`,'POST',{name:'Organizer too',email:'SINGLE@example.test',locale:'de',slots:[]});
+ const singleVoter=tokenFrom((await messageFor('single@example.test','✅')).Text);
  await client.query("UPDATE events SET voting_deadline='2000-01-01' WHERE public_token=$1",[single.public_token]);
  await page.goto(web+'/'+single.public_token);
  await status.filter({hasText:'Sondaggio chiuso'}).waitFor();
  check(await status.getAttribute('data-state')==='closed'&&await status.locator('svg').count()===1,'An expired poll is labeled closed with an icon');
  await call(`/api/events/${single.public_token}/admin/${singleAdmin}`,'PUT',{status:'CANCELLED',confirmed_slot_id:null,locale:'it'});
+ await messageFor('single@example.test','📌');await queueDrained();
+ const organizerCancel=(await messagesFor('single@example.test')).filter(m=>m.Subject.startsWith('📌'));
+ const organizerCancelText=(await messageFor('single@example.test','📌')).Text;
+ check(organizerCancel.length===1&&tokenFrom(organizerCancelText)===singleAdmin&&organizerCancelText.includes(`/${single.public_token}/${singleVoter}`),'An organizer who voted gets one notification with both private links');
  await page.reload();
  await status.filter({hasText:'Evento annullato'}).waitFor();
  check(await status.getAttribute('data-state')==='cancelled'&&await partyImage.count()===0,'Cancelled event has a distinct badge and no celebration art');

@@ -77,11 +77,13 @@ Set `GEOAPIFY_API_KEY` in your local `.env` or in your hosting provider’s serv
 
 ## Email delivery
 
-Frizzi saves email jobs in the same database transaction as the operation that triggered them. Delivery starts after the transaction commits. If SMTP or Resend fails, the job stays in the queue and Frizzi retries with increasing delays. The local worker checks the queue every ten seconds. On Vercel, the included cron is scheduled for 06:00 UTC daily. More frequent retries require a scheduler supported by your hosting plan.
+Frizzi saves email jobs in the same database transaction as the operation that triggered them. Delivery starts after the transaction commits. If SMTP or Resend fails, the job stays in the queue and Frizzi retries with increasing delays (30 seconds, doubling up to one hour). The local worker checks the queue every ten seconds. On Vercel there is no background worker: queued jobs are only retried after a write request (creating an event, voting, editing, sending a message) and by the included cron, scheduled for 06:00 UTC daily. More frequent retries require a scheduler supported by your hosting plan.
 
 `SMTP_TLS` sets the SMTP encryption to `none`, `starttls` or `tls` (implicit TLS). When it is unset, Frizzi sends to a local server such as Mailpit without TLS, uses implicit TLS on port 465 and requires STARTTLS for any other host, on port 587 unless `SMTP_PORT` says otherwise. Set `SMTP_TLS=none` for a relay on a private network or a Docker service name. Frizzi signs in with `SMTP_USERNAME` and `SMTP_PASSWORD` when both are set.
 
-`GET /api/cron/email` requires `Authorization: Bearer <CRON_SECRET>` and processes up to 25 messages per call. Resend receives an idempotency key to reduce duplicates. SMTP provides at-least-once delivery, so an interruption between sending and recording success may result in a duplicate. Frizzi removes recipient addresses and links from the queue after successful submission to the provider.
+A job is marked as failed and no longer retried after 12 attempts, or immediately when the provider rejects the message itself (an SMTP 5xx reply other than an authentication error, or a Resend 4xx response other than 401, 403, 408, 409 and 429). Each failure is logged as a `mail_failed` event.
+
+`GET /api/cron/email` requires `Authorization: Bearer <CRON_SECRET>` and processes up to 25 messages per call. Resend receives an idempotency key to reduce duplicates. SMTP provides at-least-once delivery, so an interruption between sending and recording success may result in a duplicate. Frizzi removes recipient addresses and links from the queue after successful submission to the provider or after a job is marked as failed.
 
 Changing a proposed date or time clears the votes for that option and reopens the poll. Changing the time zone clears all votes. Unchanged options keep their votes. Switching to single-choice voting requires updating any existing responses that selected multiple dates.
 

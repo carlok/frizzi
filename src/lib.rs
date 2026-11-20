@@ -472,6 +472,40 @@ fn validate_details(
         && unique_dates.len() == slots.len()
         && slots.iter().all(|s| s.end.is_none_or(|end| end > s.start))
 }
+/// How far ahead a proposed date may be: catches mistyped years without limiting real plans.
+const MAX_SLOT_MONTHS: u32 = 60;
+fn clean_description(description: Option<String>) -> Option<String> {
+    description
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+}
+fn today_in(timezone: &str) -> NaiveDate {
+    let timezone = timezone.parse::<chrono_tz::Tz>().unwrap_or(chrono_tz::UTC);
+    Utc::now().with_timezone(&timezone).date_naive()
+}
+/// Dates that are not already proposed (`existing`) must lie between today and the horizon, so
+/// an edit can keep a past option but not add one.
+fn slot_dates_in_range(slots: &[SlotInput], existing: &[NaiveDate], today: NaiveDate) -> bool {
+    let horizon = today.checked_add_months(chrono::Months::new(MAX_SLOT_MONTHS));
+    slots
+        .iter()
+        .filter(|s| !existing.contains(&s.date))
+        .all(|s| s.date >= today && horizon.is_some_and(|last| s.date <= last))
+}
+fn validate_slot_dates(
+    slots: &[SlotInput],
+    existing: &[NaiveDate],
+    timezone: &str,
+) -> Result<(), ApiError> {
+    if !slot_dates_in_range(slots, existing, today_in(timezone)) {
+        return Err(error(StatusCode::BAD_REQUEST, "invalid_dates"));
+    }
+    Ok(())
+}
+/// Voting may close on the last proposed day at the latest.
+fn deadline_within_slots(deadline: Option<NaiveDate>, slots: &[SlotInput]) -> bool {
+    deadline.is_none_or(|deadline| slots.iter().any(|s| s.date >= deadline))
+}
 fn deadline_passed(deadline: Option<NaiveDate>, timezone: &str) -> bool {
     deadline_passed_at(deadline, timezone, Utc::now())
 }
@@ -500,9 +534,10 @@ async fn create(
     State(pool): State<PgPool>,
     runtime: Runtime,
     ip: ClientIp,
-    Json(e): Json<EventInput>,
+    Json(mut e): Json<EventInput>,
 ) -> ApiResult {
     let organizer_email = email(&e.organizer_email)?;
+    e.description = clean_description(e.description.take());
     if !validate_details(
         &e.title,
         &e.description,
@@ -514,7 +549,11 @@ async fn create(
     {
         return Err(bad());
     }
+    validate_slot_dates(&e.slots, &[], &e.timezone)?;
     validate_deadline(e.voting_deadline, &e.timezone)?;
+    if !deadline_within_slots(e.voting_deadline, &e.slots) {
+        return Err(error(StatusCode::BAD_REQUEST, "invalid_deadline"));
+    }
     if let Some(geo) = &e.location_geo {
         geo.validate()?;
     }
@@ -529,6 +568,7 @@ async fn create(
     )
     .await?;
     let mut tx = pool.begin().await.map_err(db)?;
+    require_database_timezone(&mut tx, &e.timezone).await?;
     let id: Uuid = sqlx::query_scalar("INSERT INTO events (public_token,admin_token,title,description,location,organizer_name,organizer_email,organizer_locale,allow_multiple_choices,timezone,voting_deadline,location_geo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id")
         .bind(&public).bind(&secret).bind(e.title.trim()).bind(&e.description).bind(e.location.trim())
         .bind(e.organizer_name.trim()).bind(&organizer_email).bind(locale(&e.locale))
@@ -550,6 +590,22 @@ async fn create(
     tx.commit().await.map_err(db)?;
     schedule_mail(pool, runtime);
     Ok(Json(json!({"public_token": public})))
+}
+/// chrono-tz and PostgreSQL ship separate tz databases; SQL (e.g. retention) needs the zone too.
+async fn require_database_timezone(
+    tx: &mut Transaction<'_, Postgres>,
+    timezone: &str,
+) -> Result<(), ApiError> {
+    let known: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_timezone_names WHERE name=$1)")
+            .bind(timezone)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db)?;
+    if !known {
+        return Err(bad());
+    }
+    Ok(())
 }
 type SlotColumns = (Vec<NaiveDate>, Vec<NaiveTime>, Vec<Option<NaiveTime>>);
 fn slot_columns<'a>(slots: impl IntoIterator<Item = &'a SlotInput>) -> SlotColumns {
@@ -1091,8 +1147,9 @@ async fn update_details(
     State(pool): State<PgPool>,
     runtime: Runtime,
     Path((public, secret)): Path<(String, String)>,
-    Json(v): Json<DetailsInput>,
+    Json(mut v): Json<DetailsInput>,
 ) -> ApiResult {
+    v.description = clean_description(v.description.take());
     if !validate_details(
         &v.title,
         &v.description,
@@ -1109,6 +1166,9 @@ async fn update_details(
     let old = sqlx::query("SELECT id,title,description,location,organizer_name,allow_multiple_choices,timezone,voting_deadline,location_geo FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE")
         .bind(public).bind(secret).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
     let id: Uuid = old.get("id");
+    if old.get::<String, _>("timezone") != v.timezone {
+        require_database_timezone(&mut tx, &v.timezone).await?;
+    }
     let old_location: String = old.get("location");
     let old_geo = old
         .get::<Option<sqlx::types::Json<LocationGeo>>, _>("location_geo")
@@ -1148,6 +1208,11 @@ async fn update_details(
     }
     let dates_changed =
         old_slots.len() != v.slots.len() || v.slots.iter().any(|s| !old_slots.contains(s));
+    let old_dates: Vec<_> = old_slots.iter().map(|s| s.date).collect();
+    validate_slot_dates(&v.slots, &old_dates, &v.timezone)?;
+    if (deadline != old_deadline || dates_changed) && !deadline_within_slots(deadline, &v.slots) {
+        return Err(error(StatusCode::BAD_REQUEST, "invalid_deadline"));
+    }
     let mut changes: Vec<(String, String, String)> = Vec::new();
     for (key, before, after) in [
         (
@@ -1335,6 +1400,58 @@ mod tests {
         assert_eq!(starts, [time(20), time(19)]);
         assert_eq!(ends, [Some(time(22)), None]);
         assert_eq!(slot_columns(&[]), Default::default());
+    }
+    #[test]
+    fn descriptions_are_trimmed_and_blank_ones_dropped() {
+        assert_eq!(
+            clean_description(Some("  Cena \n".into())),
+            Some("Cena".into())
+        );
+        assert_eq!(clean_description(Some(" \n\t ".into())), None);
+        assert_eq!(clean_description(None), None);
+    }
+    #[test]
+    fn new_dates_must_be_between_today_and_the_horizon() {
+        let day = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        let slot = |date| SlotInput {
+            id: None,
+            date,
+            start: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+            end: None,
+        };
+        let today = day(2026, 11, 20);
+        assert!(slot_dates_in_range(&[slot(today)], &[], today));
+        assert!(slot_dates_in_range(&[slot(day(2031, 11, 20))], &[], today));
+        assert!(!slot_dates_in_range(&[slot(day(2031, 11, 21))], &[], today));
+        assert!(!slot_dates_in_range(&[slot(day(2026, 11, 19))], &[], today));
+        // An edit keeps an existing past option but cannot add a new one.
+        let past = day(2026, 11, 1);
+        assert!(slot_dates_in_range(
+            &[slot(past), slot(today)],
+            &[past],
+            today
+        ));
+        assert!(!slot_dates_in_range(
+            &[slot(past), slot(day(2026, 11, 2))],
+            &[past],
+            today
+        ));
+    }
+    #[test]
+    fn deadline_may_not_follow_the_last_proposed_date() {
+        let day = |d| NaiveDate::from_ymd_opt(2030, 2, d).unwrap();
+        let slots: Vec<_> = [3, 4]
+            .map(|d| SlotInput {
+                id: None,
+                date: day(d),
+                start: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+                end: None,
+            })
+            .to_vec();
+        assert!(deadline_within_slots(None, &slots));
+        assert!(deadline_within_slots(Some(day(1)), &slots));
+        assert!(deadline_within_slots(Some(day(4)), &slots));
+        assert!(!deadline_within_slots(Some(day(5)), &slots));
     }
     #[test]
     fn tokens_and_locales() {

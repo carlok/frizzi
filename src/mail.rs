@@ -1,7 +1,7 @@
 use crate::observability::{db_class, upstream_class};
 use crate::{db, locale, places::LocationGeo, ApiError, SlotInput};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use chrono::{Locale, NaiveDate};
+use chrono::{Locale, NaiveDate, NaiveTime};
 use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
@@ -167,7 +167,13 @@ fn numeric_date(date: NaiveDate, lang: &str) -> String {
         "zh" => "%Y/%m/%d",
         _ => "%d/%m/%Y",
     };
-    let text = date.format(pattern).to_string();
+    native_digits(date.format(pattern).to_string(), lang)
+}
+/// 24-hour `HH:MM`: `%X` would add seconds (and a 12-hour clock with a "UTC" suffix for hi/bn).
+fn clock_time(time: NaiveTime, lang: &str) -> String {
+    native_digits(time.format("%H:%M").to_string(), lang)
+}
+fn native_digits(text: String, lang: &str) -> String {
     let zero = match lang {
         "ar" => '٠',
         "bn" => '০',
@@ -190,16 +196,10 @@ fn format_slots(slots: &[SlotInput], lang: &str) -> String {
                 "{} · {} · {}",
                 s.date.format_localized("%A", loc),
                 numeric_date(s.date, lang),
-                s.date
-                    .and_time(s.start)
-                    .and_utc()
-                    .format_localized("%X", loc)
+                clock_time(s.start, lang)
             );
             if let Some(end) = s.end {
-                text.push_str(&format!(
-                    " – {}",
-                    s.date.and_time(end).and_utc().format_localized("%X", loc)
-                ));
+                text.push_str(&format!(" – {}", clock_time(end, lang)));
             }
             text
         })
@@ -248,6 +248,7 @@ pub async fn summary(
         confirmed: confirmed.is_some(),
         website: None,
         calendar: None,
+        response: None,
         notes: String::new(),
     })
 }
@@ -369,6 +370,26 @@ pub async fn enqueue_participant_message(
     Ok(result.rows_affected())
 }
 type Changes<'a> = Option<(&'a [(String, String, String)], &'a [SlotInput], bool)>;
+
+struct Recipient {
+    email: String,
+    locale: String,
+    url: String,
+    /// Secondary participant link, set when the organizer also voted with this address.
+    response: Option<String>,
+}
+
+/// One notification per address: an organizer who also voted gets the organizer email (admin
+/// link, organizer language) carrying their participant link too, since only that page edits
+/// their own availability.
+fn recipients(mut participants: Vec<Recipient>, mut organizer: Recipient) -> Vec<Recipient> {
+    let same = |p: &Recipient| p.email.trim().eq_ignore_ascii_case(organizer.email.trim());
+    if let Some(index) = participants.iter().position(same) {
+        organizer.response = Some(participants.remove(index).url);
+    }
+    participants.push(organizer);
+    participants
+}
 pub async fn notify(
     tx: &mut Transaction<'_, Postgres>,
     event: Uuid,
@@ -389,31 +410,31 @@ pub async fn notify(
             .fetch_all(&mut **tx)
             .await
             .map_err(db)?;
-    let mut recipients: Vec<(String, String, String)> = participants
+    let participants = participants
         .iter()
-        .map(|p| {
-            (
-                p.get("email"),
-                p.get("locale"),
-                format!(
-                    "{}/{}/{}",
-                    base_url(),
-                    public,
-                    p.get::<String, _>("edit_token")
-                ),
-            )
+        .map(|p| Recipient {
+            email: p.get("email"),
+            locale: p.get("locale"),
+            url: format!(
+                "{}/{}/{}",
+                base_url(),
+                public,
+                p.get::<String, _>("edit_token")
+            ),
+            response: None,
         })
         .collect();
-    recipients.push((
-        e.get("organizer_email"),
-        e.get("organizer_locale"),
-        format!(
+    let organizer_recipient = Recipient {
+        email: e.get("organizer_email"),
+        locale: e.get("organizer_locale"),
+        url: format!(
             "{}/{}/admin/{}",
             base_url(),
             public,
             e.get::<String, _>("admin_token")
         ),
-    ));
+        response: None,
+    };
     let kind = match kind {
         "CONFIRMED" => "confirmed",
         "CANCELLED" => "cancelled",
@@ -422,12 +443,13 @@ pub async fn notify(
     };
     let title: String = e.get("title");
     let organizer: String = e.get("organizer_name");
-    // Everything except the recipient's link depends only on the language, so the summary
+    let recipients = recipients(participants, organizer_recipient);
+    // Everything except the recipient's links depends only on the language, so the summary
     // queries, change notes and invitation snapshot are built once per language.
     let mut languages: HashMap<&str, (Details, Option<Uuid>)> = HashMap::new();
     let mut messages = Vec::with_capacity(recipients.len());
-    for (email, lang, url) in &recipients {
-        let lang = locale(lang);
+    for recipient in &recipients {
+        let lang = locale(&recipient.locale);
         let intro = confirmation
             .and_then(|extra| extra.intros.get(lang))
             .map(String::as_str);
@@ -446,9 +468,17 @@ pub async fn notify(
             languages.insert(lang, (details, invitation_id));
         }
         let (details, invitation_id) = &languages[lang];
-        let message = compose(lang, kind, &title, url, Some(details), intro);
+        let message = match &recipient.response {
+            // Only an organizer who also voted needs a second link; copy the shared details.
+            Some(response) => {
+                let mut details = details.clone();
+                details.response = Some(response.clone());
+                compose(lang, kind, &title, &recipient.url, Some(&details), intro)
+            }
+            None => compose(lang, kind, &title, &recipient.url, Some(details), intro),
+        };
         messages.push(serde_json::json!({
-            "recipient": email,
+            "recipient": recipient.email,
             "subject": message.subject,
             "body": message.body,
             "html": message.html,
@@ -518,10 +548,16 @@ fn change_notes(
     }
     notes
 }
+
+/// After this many claims a message is marked failed instead of being retried again.
+const MAX_ATTEMPTS: i32 = 12;
+
 #[derive(Debug)]
 struct DeliveryError {
     reason: &'static str,
     status: Option<u16>,
+    /// The provider rejected this exact message: retrying cannot succeed.
+    permanent: bool,
 }
 
 impl From<&'static str> for DeliveryError {
@@ -529,8 +565,34 @@ impl From<&'static str> for DeliveryError {
         Self {
             reason,
             status: None,
+            permanent: false,
         }
     }
+}
+
+impl DeliveryError {
+    fn rejected(reason: &'static str) -> Self {
+        Self {
+            permanent: true,
+            ..reason.into()
+        }
+    }
+}
+
+/// SMTP 5xx replies are final for the message, except authentication failures (x3x), which
+/// point at a fixable configuration problem rather than at this message.
+fn smtp_rejects_message(code: u16) -> bool {
+    (500..600).contains(&code) && (code / 10) % 10 != 3
+}
+
+/// Resend 4xx responses reject the request itself, except credential/domain problems (401/403),
+/// request timeouts (408), idempotency races (409) and rate limiting (429), which can recover.
+fn resend_rejects_message(status: u16) -> bool {
+    (400..500).contains(&status) && !matches!(status, 401 | 403 | 408 | 409 | 429)
+}
+
+fn gives_up(error: &DeliveryError, attempts: i32) -> bool {
+    error.permanent || attempts >= MAX_ATTEMPTS
 }
 
 async fn deliver(
@@ -549,7 +611,9 @@ async fn deliver(
         let port = std::env::var("SMTP_PORT").ok().and_then(|s| s.parse().ok());
         let message = Message::builder()
             .from(from.parse().map_err(|_| "invalid_mail_from")?)
-            .to(to.parse().map_err(|_| "invalid_recipient")?)
+            .to(to
+                .parse()
+                .map_err(|_| DeliveryError::rejected("invalid_recipient"))?)
             .subject(subject);
         let message = if let Some(pdf) = pdf {
             let mixed = MultiPart::mixed();
@@ -576,13 +640,14 @@ async fn deliver(
                 .header(ContentType::TEXT_PLAIN)
                 .body(body.to_owned())
         }
-        .map_err(|_| "invalid_smtp_message")?;
+        .map_err(|_| DeliveryError::rejected("invalid_smtp_message"))?;
         let tls = smtp_tls(&host, port, std::env::var("SMTP_TLS").ok().as_deref())?;
         smtp_transport(&host, port, tls)?
             .send(message)
             .await
             .map_err(|error| {
-                if error.is_timeout() {
+                let status = error.status().map(u16::from);
+                let reason = if error.is_timeout() {
                     "smtp_timeout"
                 } else if error.is_transient() {
                     "smtp_transient"
@@ -590,6 +655,11 @@ async fn deliver(
                     "smtp_rejected"
                 } else {
                     "smtp_transport"
+                };
+                DeliveryError {
+                    reason,
+                    status,
+                    permanent: error.is_permanent() && status.is_some_and(smtp_rejects_message),
                 }
             })?;
     } else {
@@ -616,9 +686,13 @@ async fn deliver(
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| DeliveryError {
-                reason: upstream_class(&error),
-                status: error.status().map(|status| status.as_u16()),
+            .map_err(|error| {
+                let status = error.status().map(|status| status.as_u16());
+                DeliveryError {
+                    reason: upstream_class(&error),
+                    status,
+                    permanent: status.is_some_and(resend_rejects_message),
+                }
             })?;
     }
     Ok(())
@@ -680,8 +754,12 @@ fn smtp_transport(
     Ok(builder.build())
 }
 pub async fn dispatch(pool: &PgPool, limit: usize) {
+    // Invitations whose PDF is still pending after a transient failure or a lease held by
+    // another worker: their other mails wait for the next run instead of rendering or waiting
+    // again now.
+    let mut pending_pdfs = std::collections::HashSet::new();
     for _ in 0..limit {
-        let message = sqlx::query("UPDATE email_outbox SET locked_until=now()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM email_outbox WHERE sent_at IS NULL AND available_at<=now() AND (locked_until IS NULL OR locked_until<now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,recipient,subject,body,html,invitation_id,attempts")
+        let message = sqlx::query("UPDATE email_outbox SET locked_until=now()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL AND available_at<=now() AND (locked_until IS NULL OR locked_until<now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,recipient,subject,body,html,invitation_id,attempts")
             .fetch_optional(pool).await;
         let row = match message {
             Ok(Some(row)) => row,
@@ -696,8 +774,12 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
         let start = std::time::Instant::now();
         let html: Option<String> = row.get("html");
         let invitation: Option<Uuid> = row.get("invitation_id");
+        let may_wait = attempts < MAX_ATTEMPTS;
         let pdf = match invitation {
-            Some(invitation) => invitation::attachment(pool, invitation).await,
+            Some(invitation) if may_wait && pending_pdfs.contains(&invitation) => {
+                Err(invitation::AttachmentError::RenderInProgress)
+            }
+            Some(invitation) => invitation::attachment(pool, invitation, may_wait).await,
             None => Ok(None),
         };
         let result = match pdf {
@@ -712,16 +794,33 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
                 )
                 .await
             }
+            Err(error) if error.is_render_pending() => {
+                pending_pdfs.extend(invitation);
+                Err(error.reason().into())
+            }
             Err(error) => {
                 tracing::error!(event = "invitation_load_failed", mail_id = %id, reason = error.reason());
                 Err("invitation_load_failed".into())
             }
         };
         let duration_ms = start.elapsed().as_millis() as u64;
-        if let Err(error) = result {
+        if let Some(error) = result
+            .as_ref()
+            .err()
+            .filter(|error| gives_up(error, attempts))
+        {
+            tracing::error!(event = "mail_failed", mail_id = %id, attempts, duration_ms,
+                reason = error.reason, upstream_status = error.status, permanent = error.permanent);
+            // Undeliverable: drop bearer links and addresses just like after delivery.
+            if let Err(error) = sqlx::query("UPDATE email_outbox SET failed_at=now(),locked_until=NULL,body='',html=NULL,recipient='',subject='',invitation_id=NULL WHERE id=$1").bind(id).execute(pool).await {
+                tracing::error!(event = "mail_failure_write_failed", mail_id = %id, reason = db_class(&error));
+            }
+            release_invitation(pool, invitation).await;
+        } else if let Err(error) = result {
             tracing::warn!(event = "mail_deferred", mail_id = %id, attempts, duration_ms,
                 reason = error.reason, upstream_status = error.status);
-            if let Err(error) = sqlx::query("UPDATE email_outbox SET locked_until=NULL,available_at=now()+make_interval(secs=>LEAST(3600,30*attempts)) WHERE id=$1").bind(id).execute(pool).await {
+            // Exponential backoff (30 s doubling, capped at 1 h) spreads MAX_ATTEMPTS over ~5 h.
+            if let Err(error) = sqlx::query("UPDATE email_outbox SET locked_until=NULL,available_at=now()+make_interval(secs=>LEAST(3600,30*power(2,LEAST(attempts,8)-1))) WHERE id=$1").bind(id).execute(pool).await {
                 tracing::error!(event = "mail_retry_schedule_failed", mail_id = %id, reason = db_class(&error));
             }
         } else {
@@ -731,14 +830,17 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
                 Err(error) => tracing::error!(event = "mail_receipt_write_failed", mail_id = %id, reason = db_class(&error)),
                 Ok(_) => tracing::info!(event = "mail_accepted", mail_id = %id, attempts, duration_ms),
             }
-            if let Some(invitation) = invitation {
-                // Drop the rendered PDF as soon as its last recipient has it; cleanup() catches races.
-                if let Err(error) = sqlx::query("DELETE FROM confirmation_invitations WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=$1)")
-                    .bind(invitation).execute(pool).await {
-                    tracing::error!(event = "maintenance_cleanup_failed", operation = "invitation", reason = db_class(&error));
-                }
-            }
+            release_invitation(pool, invitation).await;
         }
+    }
+}
+
+/// Drop the rendered PDF as soon as no pending mail needs it; cleanup() catches races.
+async fn release_invitation(pool: &PgPool, invitation: Option<Uuid>) {
+    let Some(invitation) = invitation else { return };
+    if let Err(error) = sqlx::query("DELETE FROM confirmation_invitations WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=$1)")
+        .bind(invitation).execute(pool).await {
+        tracing::error!(event = "maintenance_cleanup_failed", operation = "invitation", reason = db_class(&error));
     }
 }
 
@@ -746,7 +848,7 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
 pub async fn cleanup(pool: &PgPool) {
     for (operation, query) in [
         ("invitation", "DELETE FROM confirmation_invitations WHERE NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=confirmation_invitations.id)"),
-        ("sent_mail", "DELETE FROM email_outbox WHERE sent_at<now()-interval '7 days'"),
+        ("sent_mail", "DELETE FROM email_outbox WHERE sent_at<now()-interval '7 days' OR failed_at<now()-interval '7 days'"),
         ("rate_limit", "DELETE FROM request_limits WHERE hour<now()-interval '2 hours'"),
     ] {
         if let Err(error) = sqlx::query(query).execute(pool).await {
@@ -758,7 +860,7 @@ pub async fn cleanup(pool: &PgPool) {
 pub async fn inspect_queue(pool: &PgPool) {
     let counts = sqlx::query_as::<_, (i64, i64)>(
         "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(created_at))::bigint, 0)
-         FROM email_outbox WHERE sent_at IS NULL",
+         FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL",
     )
     .fetch_one(pool)
     .await;
@@ -907,40 +1009,75 @@ mod tests {
         }
     }
 
-    fn slot(end: Option<(u32, u32)>) -> SlotInput {
-        let time = |(h, m)| chrono::NaiveTime::from_hms_opt(h, m, 0).unwrap();
-        SlotInput {
-            id: None,
-            date: NaiveDate::from_ymd_opt(2027, 6, 15).unwrap(),
-            start: time((20, 0)),
-            end: end.map(time),
+    #[test]
+    fn only_message_specific_rejections_stop_retries() {
+        assert!(smtp_rejects_message(550) && smtp_rejects_message(552));
+        assert!(!smtp_rejects_message(535) && !smtp_rejects_message(530));
+        assert!(!smtp_rejects_message(421) && !smtp_rejects_message(451));
+        assert!(resend_rejects_message(400) && resend_rejects_message(422));
+        for status in [401, 403, 408, 409, 429, 500, 503] {
+            assert!(!resend_rejects_message(status), "{status}");
         }
+        let transient = DeliveryError::from("smtp_timeout");
+        assert!(!gives_up(&transient, 1) && !gives_up(&transient, MAX_ATTEMPTS - 1));
+        assert!(gives_up(&transient, MAX_ATTEMPTS));
+        assert!(gives_up(&DeliveryError::rejected("invalid_recipient"), 1));
     }
 
-    // Documents current behaviour: `%X` renders seconds in every locale, and
-    // hi/bn additionally append "UTC" to what is really event-local time.
     #[test]
-    fn slots_render_weekday_date_and_times() {
-        let slots = [slot(Some((22, 30))), slot(None)];
-        assert_eq!(
-            format_slots(&slots, "it"),
-            "martedì · 15/06/2027 · 20:00:00 – 22:30:00\nmartedì · 15/06/2027 · 20:00:00"
+    fn an_organizer_who_voted_gets_one_email_with_both_links() {
+        let person = |email: &str, url: &str| Recipient {
+            email: email.into(),
+            locale: "es".into(),
+            url: url.into(),
+            response: None,
+        };
+        let organizer = Recipient {
+            locale: "it".into(),
+            ..person("ada@example.test", "/admin")
+        };
+        let list = recipients(
+            vec![
+                person("lucia@example.test", "/lucia"),
+                person("ADA@example.test", "/ada"),
+            ],
+            organizer,
         );
+        let summary: Vec<_> = list
+            .iter()
+            .map(|r| (r.url.as_str(), r.locale.as_str(), r.response.as_deref()))
+            .collect();
+        assert_eq!(
+            summary,
+            [("/lucia", "es", None), ("/admin", "it", Some("/ada"))]
+        );
+        let alone = recipients(
+            vec![person("lucia@example.test", "/lucia")],
+            person("ada@example.test", "/admin"),
+        );
+        assert_eq!(alone.len(), 2);
+        assert!(alone.iter().all(|r| r.response.is_none()));
+    }
+
+    #[test]
+    fn slot_times_are_hours_and_minutes_in_every_locale() {
+        let slot = SlotInput {
+            id: None,
+            date: NaiveDate::from_ymd_opt(2030, 2, 3).unwrap(),
+            start: NaiveTime::from_hms_opt(20, 5, 0).unwrap(),
+            end: Some(NaiveTime::from_hms_opt(22, 30, 0).unwrap()),
+        };
         for (lang, expected) in [
-            ("en", "Tuesday · 15/06/2027 · 20:00:00"),
-            ("de", "Dienstag · 15.06.2027 · 20:00:00"),
-            ("ar", "الثلاثاء · ١٥/٠٦/٢٠٢٧ · 20:00:00"),
-            ("zh", "星期二 · 2027/06/15 · 20时00分00秒"),
-            ("xx", "martedì · 15/06/2027 · 20:00:00"),
+            ("it", "20:05 – 22:30"),
+            ("en", "20:05 – 22:30"),
+            ("de", "20:05 – 22:30"),
+            ("zh", "20:05 – 22:30"),
+            ("hi", "20:05 – 22:30"),
+            ("ar", "٢٠:٠٥ – ٢٢:٣٠"),
+            ("bn", "২০:০৫ – ২২:৩০"),
         ] {
-            assert_eq!(format_slots(&slots[1..], lang), expected, "{lang}");
-        }
-        for lang in ["hi", "bn"] {
-            let text = format_slots(&slots[1..], lang);
-            assert!(
-                text.contains("08:00:00") && text.ends_with(" UTC"),
-                "{text}"
-            );
+            let text = format_slots(std::slice::from_ref(&slot), lang);
+            assert!(text.ends_with(&format!(" · {expected}")), "{lang}: {text}");
         }
     }
 }
