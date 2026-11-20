@@ -79,7 +79,7 @@ Set `GEOAPIFY_API_KEY` in your local `.env` or in your hosting provider’s serv
 
 Frizzi saves email jobs in the same database transaction as the operation that triggered them. Delivery starts after the transaction commits. If SMTP or Resend fails, the job stays in the queue and Frizzi retries with increasing delays. The local worker checks the queue every ten seconds. On Vercel, the included cron is scheduled for 06:00 UTC daily. More frequent retries require a scheduler supported by your hosting plan.
 
-Frizzi sends to a local SMTP server such as Mailpit without TLS. For any other `SMTP_HOST`, it requires STARTTLS on `SMTP_PORT` (587 by default) and signs in with `SMTP_USERNAME` and `SMTP_PASSWORD` when both are set.
+`SMTP_TLS` sets the SMTP encryption to `none`, `starttls` or `tls` (implicit TLS). When it is unset, Frizzi sends to a local server such as Mailpit without TLS, uses implicit TLS on port 465 and requires STARTTLS for any other host, on port 587 unless `SMTP_PORT` says otherwise. Set `SMTP_TLS=none` for a relay on a private network or a Docker service name. Frizzi signs in with `SMTP_USERNAME` and `SMTP_PASSWORD` when both are set.
 
 `GET /api/cron/email` requires `Authorization: Bearer <CRON_SECRET>` and processes up to 25 messages per call. Resend receives an idempotency key to reduce duplicates. SMTP provides at-least-once delivery, so an interruption between sending and recording success may result in a duplicate. Frizzi removes recipient addresses and links from the queue after successful submission to the provider.
 
@@ -89,7 +89,7 @@ Changing a proposed date or time clears the votes for that option and reopens th
 
 [`.env.example`](.env.example) lists the server-side environment variables and safe development defaults. Keep real credentials in a local `.env` file with permissions `0600` or in your hosting provider’s secret store. The Docker database and test mailbox bind only to loopback.
 
-The API applies hourly rate limits per client address, per email address and per event. On Vercel it reads the client address from `X-Real-IP` or `X-Forwarded-For`. Elsewhere it uses the connecting address, unless `FRIZZI_TRUST_PROXY=1` is set behind a reverse proxy that overwrites those headers. `FRIZZI_RATE_LIMIT_SCALE` multiplies the per-address limits. IPv6 clients share a limit for each /64 network.
+The API applies hourly rate limits per client address, per email address and per event. On Vercel it reads the client address from `X-Real-IP` or `X-Forwarded-For`. Behind a reverse proxy on the same host, it uses the last `X-Forwarded-For` entry, which that proxy added, or `X-Real-IP` when there is no `X-Forwarded-For`. Set `FRIZZI_TRUST_PROXY=1` when the proxy runs on another machine, or `0` to always use the connecting address. `FRIZZI_RATE_LIMIT_SCALE` multiplies the per-address limits. IPv6 clients share a limit for each /64 network.
 
 To enable PDF invitations, set `FRIZZI_TYPST` and `FRIZZI_PDF_FONTS`. The [Typst setup script](deploy/setup-invitation-pdf.py) installs the renderer and fonts on Linux x86-64. Frizzi sends the HTML and plain-text confirmation when Typst is unavailable.
 

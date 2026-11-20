@@ -577,7 +577,8 @@ async fn deliver(
                 .body(body.to_owned())
         }
         .map_err(|_| "invalid_smtp_message")?;
-        smtp_transport(&host, port)?
+        let tls = smtp_tls(&host, port, std::env::var("SMTP_TLS").ok().as_deref())?;
+        smtp_transport(&host, port, tls)?
             .send(message)
             .await
             .map_err(|error| {
@@ -622,26 +623,52 @@ async fn deliver(
     }
     Ok(())
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SmtpTls {
+    None,
+    StartTls,
+    /// Implicit TLS from the first byte, usually on port 465.
+    Tls,
+}
 fn local_smtp(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
 }
-/// Loopback relays such as Mailpit run without TLS. Any other host requires STARTTLS and uses
-/// `SMTP_USERNAME`/`SMTP_PASSWORD` when both are set.
+/// `SMTP_TLS` is `none`, `starttls` or `tls`. When unset, loopback relays such as Mailpit run
+/// without TLS, port 465 uses implicit TLS and any other relay requires STARTTLS. An unknown
+/// value fails delivery rather than falling back to plain text.
+fn smtp_tls(host: &str, port: Option<u16>, setting: Option<&str>) -> Result<SmtpTls, &'static str> {
+    match setting
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("") if local_smtp(host) => Ok(SmtpTls::None),
+        None | Some("") if port == Some(465) => Ok(SmtpTls::Tls),
+        None | Some("") | Some("starttls") => Ok(SmtpTls::StartTls),
+        Some("none") => Ok(SmtpTls::None),
+        Some("tls") => Ok(SmtpTls::Tls),
+        Some(_) => Err("invalid_smtp_tls"),
+    }
+}
+/// Builds the SMTP client, signing in with `SMTP_USERNAME`/`SMTP_PASSWORD` when both are set.
 fn smtp_transport(
     host: &str,
     port: Option<u16>,
+    tls: SmtpTls,
 ) -> Result<AsyncSmtpTransport<Tokio1Executor>, &'static str> {
-    let (builder, default_port) = if local_smtp(host) {
-        (
+    let (builder, default_port) = match tls {
+        SmtpTls::None => (
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host),
             1025,
-        )
-    } else {
-        (
+        ),
+        SmtpTls::StartTls => (
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
                 .map_err(|_| "smtp_tls_config")?,
             587,
-        )
+        ),
+        SmtpTls::Tls => (
+            AsyncSmtpTransport::<Tokio1Executor>::relay(host).map_err(|_| "smtp_tls_config")?,
+            465,
+        ),
     };
     let mut builder = builder
         .port(port.unwrap_or(default_port))
@@ -756,11 +783,32 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn remote_smtp_uses_starttls() {
-        assert!(local_smtp("localhost") && local_smtp("127.0.0.1") && local_smtp("::1"));
-        assert!(!local_smtp("smtp.example.com"));
-        assert!(smtp_transport("smtp.example.com", None).is_ok());
-        assert!(smtp_transport("127.0.0.1", Some(1025)).is_ok());
+    fn smtp_tls_mode_defaults_and_overrides() {
+        use SmtpTls::{StartTls, Tls};
+        let none = Ok(SmtpTls::None);
+        assert_eq!(smtp_tls("localhost", Some(1025), None), none);
+        assert_eq!(smtp_tls("127.0.0.1", None, Some("")), none);
+        assert_eq!(smtp_tls("::1", None, None), none);
+        assert_eq!(smtp_tls("smtp.example.com", None, None), Ok(StartTls));
+        assert_eq!(smtp_tls("smtp.example.com", Some(587), None), Ok(StartTls));
+        assert_eq!(smtp_tls("smtp.example.com", Some(465), None), Ok(Tls));
+        assert_eq!(smtp_tls("mailpit", Some(1025), Some("none")), none);
+        assert_eq!(
+            smtp_tls("localhost", Some(1025), Some(" STARTTLS ")),
+            Ok(StartTls)
+        );
+        assert_eq!(
+            smtp_tls("smtp.example.com", Some(2465), Some("tls")),
+            Ok(Tls)
+        );
+        assert_eq!(
+            smtp_tls("smtp.example.com", Some(25), Some("off")),
+            Err("invalid_smtp_tls")
+        );
+        assert!(local_smtp("localhost") && !local_smtp("smtp.example.com"));
+        for mode in [SmtpTls::None, StartTls, Tls] {
+            assert!(smtp_transport("smtp.example.com", None, mode).is_ok());
+        }
     }
 
     #[test]
