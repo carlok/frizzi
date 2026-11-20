@@ -1,13 +1,50 @@
 use crate::{db, ApiError};
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Postgres, Row, Transaction};
-use std::{fmt::Write, process::Stdio, time::Duration};
+use std::{
+    fmt::Write,
+    fs,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::OnceLock,
+    time::Duration,
+};
 use tokio::{io::AsyncWriteExt, process::Command};
 use uuid::Uuid;
 
 use super::template::Details;
 
 pub(super) const FILENAME: &str = "invito-frizzi.pdf";
+
+const PDF_ASSETS: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/pdf_assets.rs"));
+static PDF_BUNDLE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+#[cfg(unix)]
+fn setup_pdf_bundle() -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("frizzi-pdf-{}", std::process::id()));
+    for (name, content) in PDF_ASSETS {
+        let path = root.join(name);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(&path, content)?;
+        if *name == "typst" {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(root)
+}
+
+fn pdf_bundle() -> Option<&'static Path> {
+    if PDF_ASSETS.is_empty() {
+        return None;
+    }
+    #[cfg(unix)]
+    return PDF_BUNDLE
+        .get_or_init(|| setup_pdf_bundle().ok())
+        .as_deref();
+    #[cfg(not(unix))]
+    None
+}
 
 pub(super) async fn enqueue(
     tx: &mut Transaction<'_, Postgres>,
@@ -18,7 +55,9 @@ pub(super) async fn enqueue(
     intro: Option<&str>,
     details: &Details,
 ) -> Result<Option<Uuid>, ApiError> {
-    if std::env::var_os("FRIZZI_TYPST").is_none_or(|value| value.is_empty()) {
+    if PDF_ASSETS.is_empty()
+        && std::env::var_os("FRIZZI_TYPST").is_none_or(|value| value.is_empty())
+    {
         return Ok(None);
     }
     let default_intro = rust_i18n::t!("mail.confirmedBody", locale = lang);
@@ -85,9 +124,17 @@ pub(super) async fn attachment(pool: &PgPool, id: Uuid) -> Result<Option<Vec<u8>
 }
 
 async fn render(payload: &Value) -> Result<Vec<u8>, &'static str> {
-    let executable = std::env::var_os("FRIZZI_TYPST")
-        .filter(|path| !path.is_empty())
-        .ok_or("typst_unconfigured")?;
+    let (executable, fonts) = if let Some(root) = pdf_bundle() {
+        (
+            root.join("typst").into_os_string(),
+            Some(root.join("fonts").into_os_string()),
+        )
+    } else {
+        let executable = std::env::var_os("FRIZZI_TYPST")
+            .filter(|path| !path.is_empty())
+            .ok_or("typst_unconfigured")?;
+        (executable, std::env::var_os("FRIZZI_PDF_FONTS"))
+    };
     let mut command = Command::new(executable);
     command
         .args(["compile", "--root", ".", "--ignore-system-fonts"])
@@ -95,7 +142,7 @@ async fn render(payload: &Value) -> Result<Vec<u8>, &'static str> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    if let Some(fonts) = std::env::var_os("FRIZZI_PDF_FONTS").filter(|path| !path.is_empty()) {
+    if let Some(fonts) = fonts.filter(|path| !path.is_empty()) {
         command.arg("--font-path").arg(fonts);
     }
     command.args(["-", "-"]);
@@ -130,7 +177,11 @@ fn source(payload: &Value) -> String {
     for byte in payload.to_string().bytes() {
         let _ = write!(source, "{byte},");
     }
-    source.push_str(")))\n");
+    source.push_str(")))\n#let guests-image = bytes((");
+    for byte in include_bytes!("invitation-guests.webp") {
+        let _ = write!(source, "{byte},");
+    }
+    source.push_str("))\n");
     source.push_str(include_str!("invitation.typ"));
     source
 }

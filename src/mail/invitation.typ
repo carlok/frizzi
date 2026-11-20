@@ -26,7 +26,7 @@
       #linebreak()
       #heading-label(invitation.labels.invitation)
     ],
-    pdf.artifact(image("/src/mail/invitation-guests.webp", width: 50mm)),
+    pdf.artifact(image(guests-image, format: "webp", width: 50mm)),
   ),
 )
 

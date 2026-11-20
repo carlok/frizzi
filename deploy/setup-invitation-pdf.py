@@ -5,6 +5,7 @@ from platform import machine
 from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 from urllib.request import urlopen
+from argparse import ArgumentParser
 import tarfile
 from io import BytesIO
 
@@ -29,9 +30,11 @@ def install(path, content, mode=0o644):
 if machine() != "x86_64":
     raise SystemExit("Install Typst manually on this architecture.")
 
-home = Path.home()
-binary = home / ".local/bin/typst"
-font_dir = home / ".local/share/frizzi/pdf-fonts"
+parser = ArgumentParser()
+parser.add_argument("--bundle", type=Path, help="Install into a self-contained deployment directory.")
+bundle = parser.parse_args().bundle
+binary = bundle / "typst" if bundle else Path.home() / ".local/bin/typst"
+font_dir = bundle / "fonts" if bundle else Path.home() / ".local/share/frizzi/pdf-fonts"
 release = "typst-x86_64-unknown-linux-musl"
 archive_hash = "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c"
 fonts_source = "https://raw.githubusercontent.com/google/fonts/cc5661d43cd4f9aad5567033a8e15ca28dc35c86/ofl/"

@@ -23,6 +23,7 @@
 
 /build/
 /build-domain/
+/runtime/frizzi/
 
 # Note originali e configurazione specifica del server
 /requirements.md
