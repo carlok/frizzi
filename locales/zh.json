@@ -145,7 +145,21 @@
     "availableOf": "{count, plural, other {{n} / {total} 人有空}}",
     "dateLetters": "日 月 年",
     "openDatePicker": "打开日期选择器",
-    "highlightedDate": "突出显示的日期"
+    "highlightedDate": "突出显示的日期",
+    "duplicateDate": "这个日期已在列表中。请换一个日期或删除这一行。",
+    "endBeforeStart": "结束时间必须晚于开始时间。",
+    "invalidTimezone": "请从列表中选择时区，例如 Asia/Shanghai。",
+    "timezoneHint": "搜索城市，例如 Asia/Shanghai。",
+    "yourTime": "你的时区",
+    "messagePreview": "预览",
+    "messageConfirmTitle": "发送这条消息？",
+    "messageConfirmText": "{count, plural, other {{n} 人将通过邮件收到这条消息。}}",
+    "adminLinkTitle": "你的管理链接",
+    "adminLinkNote": "请勿外传：拥有此链接的人可以修改、确认或取消活动。请把上面的链接发给受邀者。",
+    "retry": "重试",
+    "createEvent": "创建活动",
+    "noPeopleOrganizer": "还没有回复。分享链接，收集大家有空的时间。",
+    "calendarHeat": "数字和颜色：有空的人数"
   },
   "pdf": {
     "invitation": "邀请函",

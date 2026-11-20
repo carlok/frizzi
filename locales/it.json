@@ -145,7 +145,21 @@
     "availableOf": "{count, plural, one {{n} / {total} disponibile} other {{n} / {total} disponibili}}",
     "dateLetters": "GG MM AAAA",
     "openDatePicker": "Apri il calendario",
-    "highlightedDate": "Data evidenziata"
+    "highlightedDate": "Data evidenziata",
+    "duplicateDate": "Questa data è già nell’elenco. Scegline un’altra o rimuovi la riga.",
+    "endBeforeStart": "L’orario di fine deve essere dopo l’inizio.",
+    "invalidTimezone": "Scegli un fuso orario dall’elenco, ad es. Europe/Rome.",
+    "timezoneHint": "Cerca una città, ad es. Europe/Rome.",
+    "yourTime": "Nel tuo fuso orario",
+    "messagePreview": "Anteprima",
+    "messageConfirmTitle": "Inviare il messaggio?",
+    "messageConfirmText": "{count, plural, one {{n} persona riceverà questo messaggio via email.} other {{n} persone riceveranno questo messaggio via email.}}",
+    "adminLinkTitle": "Il tuo link di gestione",
+    "adminLinkNote": "Tienilo privato: chi lo ha può modificare, confermare o annullare l’evento. Agli invitati manda il link qui sopra.",
+    "retry": "Riprova",
+    "createEvent": "Crea un evento",
+    "noPeopleOrganizer": "Ancora nessuna risposta. Condividi il link per raccogliere le disponibilità.",
+    "calendarHeat": "Numero e colore: persone disponibili"
   },
   "pdf": {
     "invitation": "Lettera d’invito",

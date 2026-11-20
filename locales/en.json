@@ -145,7 +145,21 @@
     "availableOf": "{count, plural, one {{n} / {total} available} other {{n} / {total} available}}",
     "dateLetters": "DD MM YYYY",
     "openDatePicker": "Open date picker",
-    "highlightedDate": "Highlighted date"
+    "highlightedDate": "Highlighted date",
+    "duplicateDate": "This date is already in the list. Pick another one or remove the row.",
+    "endBeforeStart": "The end time must be after the start.",
+    "invalidTimezone": "Choose a time zone from the list, e.g. Europe/London.",
+    "timezoneHint": "Search for a city, e.g. Europe/London.",
+    "yourTime": "In your time zone",
+    "messagePreview": "Preview",
+    "messageConfirmTitle": "Send the message?",
+    "messageConfirmText": "{count, plural, one {{n} person will receive this message by email.} other {{n} people will receive this message by email.}}",
+    "adminLinkTitle": "Your management link",
+    "adminLinkNote": "Keep it private: anyone with it can edit, confirm or cancel the event. Send guests the link above.",
+    "retry": "Try again",
+    "createEvent": "Create an event",
+    "noPeopleOrganizer": "No responses yet. Share the link to collect availability.",
+    "calendarHeat": "Number and colour: people available"
   },
   "pdf": {
     "invitation": "Your invitation",

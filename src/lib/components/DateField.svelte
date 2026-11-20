@@ -8,6 +8,8 @@
  export let value = '';
  export let required = false;
  export let describedBy: string | undefined = undefined;
+ /** Set by the form when the date is valid on its own but wrong in context, e.g. used twice. */
+ export let conflict = false;
 
  const example = new Date('2031-04-27T12:00:00Z');
  let input: HTMLInputElement;
@@ -67,7 +69,7 @@
 <label for={name}>{label}{required ? ' *' : ''}</label>
 <div class="date-entry">
  <input id={name} {name} type="text" inputmode="numeric" autocomplete="off"
-  {required} {placeholder} aria-describedby={describedByIds} aria-invalid={showError} bind:this={input} value={draft}
+  {required} {placeholder} aria-describedby={describedByIds} aria-invalid={showError || conflict} bind:this={input} value={draft}
   on:input={(event) => setDraft(event.currentTarget.value)}
   on:invalid={() => touched = true}
   on:blur={() => { reveal(); if (value) usePicker(value); }}/>

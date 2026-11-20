@@ -1,6 +1,8 @@
 <script lang="ts">
  import { resolve } from '$app/paths';
  import '../style.css';
+ // The same hashed file style.css points at: preloading it starts the download before the CSS is parsed.
+ import interFont from '#lib/assets/InterVariable-LatinCyrillic.woff2?url';
  import { onMount } from 'svelte';
  import { track } from '#lib/telemetry.ts';
  import { Sparkles, Globe } from '@lucide/svelte';
@@ -34,7 +36,7 @@
     try { localStorage.setItem('locale',code); } catch { /* Keep the current language without persistence. */ }
  }
 </script>
-<svelte:head><title>Frizzi · {$t.tagline}</title><meta name="description" content={$t.intro}/></svelte:head>
+<svelte:head><title>Frizzi · {$t.tagline}</title><meta name="description" content={$t.intro}/><link rel="preload" href={interFont} as="font" type="font/woff2" crossorigin="anonymous"/></svelte:head>
 <header data-ready={ready}>
  <a class="brand" href={resolve('')} aria-label="Frizzi"><span class="brand-icon"><Sparkles aria-hidden="true"/></span> frizzi<span class="brand-dot">.</span></a>
  <label class="language"><Globe size={18} aria-hidden="true"/><span class="sr-only">{$t.language}</span><select value={$lang} on:change={event=>choose(event.currentTarget.value)}>{#each Object.entries(languages) as [code,name]}<option value={code} lang={code}>{name}</option>{/each}</select></label>

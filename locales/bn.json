@@ -145,7 +145,21 @@
     "availableOf": "{count, plural, one {{n} / {total} জন আসতে পারবেন} other {{n} / {total} জন আসতে পারবেন}}",
     "dateLetters": "দিন মাস বছর",
     "openDatePicker": "ক্যালেন্ডার খুলুন",
-    "highlightedDate": "চিহ্নিত তারিখ"
+    "highlightedDate": "চিহ্নিত তারিখ",
+    "duplicateDate": "এই তারিখটি তালিকায় আগে থেকেই আছে। অন্য একটি বেছে নিন বা সারিটি সরিয়ে দিন।",
+    "endBeforeStart": "শেষের সময় শুরুর সময়ের পরে হতে হবে।",
+    "invalidTimezone": "তালিকা থেকে একটি টাইম জোন বেছে নিন, যেমন Asia/Dhaka।",
+    "timezoneHint": "একটি শহর খুঁজুন, যেমন Asia/Dhaka।",
+    "yourTime": "আপনার টাইম জোনে",
+    "messagePreview": "প্রিভিউ",
+    "messageConfirmTitle": "বার্তাটি পাঠাবেন?",
+    "messageConfirmText": "{count, plural, one {{n} জন এই বার্তাটি ইমেইলে পাবেন।} other {{n} জন এই বার্তাটি ইমেইলে পাবেন।}}",
+    "adminLinkTitle": "আপনার পরিচালনার লিংক",
+    "adminLinkNote": "এটি গোপন রাখুন: এই লিংক যার কাছে আছে, সে অনুষ্ঠানটি বদলাতে, নিশ্চিত বা বাতিল করতে পারে। অতিথিদের উপরের লিংকটি পাঠান।",
+    "retry": "আবার চেষ্টা করুন",
+    "createEvent": "একটি অনুষ্ঠান তৈরি করুন",
+    "noPeopleOrganizer": "এখনও কোনো উত্তর নেই। সবার সুবিধামতো সময় জানতে লিংকটি শেয়ার করুন।",
+    "calendarHeat": "সংখ্যা ও রং: কতজন আসতে পারবেন"
   },
   "pdf": {
     "invitation": "আমন্ত্রণপত্র",

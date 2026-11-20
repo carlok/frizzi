@@ -54,3 +54,9 @@ export function readDate(raw: string, order: DatePart[]): string {
     const date = new Date(`${iso}T12:00:00Z`);
     return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === iso ? iso : '';
 }
+
+/** Minutes in five-minute steps, plus the saved minute when it is off that grid so older events keep their time. */
+export function minuteOptions(current = '', step = 5) {
+    const minutes = Array.from({ length: 60 / step }, (_, index) => String(index * step).padStart(2, '0'));
+    return /^[0-5]\d$/.test(current) && !minutes.includes(current) ? [...minutes, current].sort() : minutes;
+}
