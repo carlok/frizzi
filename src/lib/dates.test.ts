@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dateOrder, readDate, type DatePart } from './dates.ts';
-import { dateFormatter, languages } from './i18n.ts';
+import { dateOrder, datePlaceholder, firstWeekday, readDate, type DatePart } from './dates.ts';
+import { dateFormatter, intlLocale, languages } from './i18n.ts';
 
 const example = new Date('2031-04-27T12:00:00Z');
 const orderFor = (language: string) => dateOrder(dateFormatter(language).formatToParts(example));
@@ -17,6 +17,34 @@ describe('dateOrder', () => {
 
     it('ignores literals and other parts', () => {
         expect(dateOrder(dateFormatter('de', true).formatToParts(example))).toEqual(dmy);
+    });
+});
+
+describe('datePlaceholder', () => {
+    const dictionaries = import.meta.glob<{ ui: { dateLetters: string } }>('../../locales/*.json', { eager: true, import: 'default' });
+    const placeholder = (language: string) => datePlaceholder(dateFormatter(language).formatToParts(example), dictionaries[`../../locales/${language}.json`].ui.dateLetters);
+
+    it('spells the date pattern in the letters of each language', () => {
+        expect(placeholder('it')).toBe('GG/MM/AAAA');
+        expect(placeholder('en')).toBe('DD/MM/YYYY');
+        expect(placeholder('de')).toBe('TT.MM.JJJJ');
+        expect(placeholder('fr')).toBe('JJ/MM/AAAA');
+        expect(placeholder('zh')).toBe('年/月/日');
+    });
+
+    it('names day, month and year in every language', () => {
+        for (const language of Object.keys(languages)) {
+            expect(dictionaries[`../../locales/${language}.json`].ui.dateLetters.split(' '), language).toHaveLength(3);
+            expect(placeholder(language), language).not.toMatch(/\d/);
+        }
+    });
+});
+
+describe('firstWeekday', () => {
+    it('starts English weeks on Monday, like its British date format', () => {
+        expect(firstWeekday('en-US')).toBe(0);
+        expect(firstWeekday(intlLocale('en'))).toBe(1);
+        expect(firstWeekday(intlLocale('it'))).toBe(1);
     });
 });
 
@@ -73,6 +101,11 @@ describe('readDate', () => {
 
     it('drops bidirectional marks', () => {
         expect(readDate('‏27‏/04‎/2031؜', dmy)).toBe('2031-04-27');
+    });
+
+    it('trims whitespace hidden behind bidirectional marks', () => {
+        expect(readDate('‏ 27/04/2031', dmy)).toBe('2031-04-27');
+        expect(readDate('27/04/2031 ‎', dmy)).toBe('2031-04-27');
     });
 
     it('rejects days that do not exist', () => {

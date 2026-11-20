@@ -1,5 +1,5 @@
 <script lang="ts">
- import { lang, t } from '#lib/i18n.ts';
+ import { intlLocale, lang, t } from '#lib/i18n.ts';
 
  export let value = '';
  export let name: string;
@@ -10,7 +10,7 @@
  const minutes = Array.from({ length: 60 }, (_, index) => index.toString().padStart(2, '0'));
  $: hour = value.slice(0, 2);
  $: minute = value.slice(3, 5) || '00';
- $: numbers = new Intl.NumberFormat($lang || 'it', { minimumIntegerDigits: 2 });
+ $: numbers = new Intl.NumberFormat(intlLocale($lang), { minimumIntegerDigits: 2 });
 
  function setHour(hour: string) {
    value = hour ? `${hour}:${minute}` : '';
