@@ -15,7 +15,7 @@ export function detectLocale(saved: string | null | undefined, preferred: readon
     return match ?? 'it';
 }
 /** ICU plural messages: format them with $plural(key, count), not $t. */
-export const pluralKeys = ['availableCount', 'availableOf', 'messageQueued'] as const;
+export const pluralKeys = ['availableCount', 'availableOf', 'messageQueued', 'messageConfirmText'] as const;
 export type PluralKey = typeof pluralKeys[number];
 export type Messages = Omit<typeof it.ui, PluralKey>;
 const plain = Object.keys(it.ui).filter(key => !(pluralKeys as readonly string[]).includes(key));
@@ -45,15 +45,17 @@ const dateLocales: Record<string, string> = {
 export function intlLocale(language: string | null | undefined) {
     return Object.hasOwn(dateLocales, language ?? '') ? dateLocales[language!] : dateLocales.it;
 }
-export function dateFormatter(language: string | null | undefined, withWeekday = false) {
+export function dateFormatter(language: string | null | undefined) {
     return new Intl.DateTimeFormat(intlLocale(language), {
-        weekday: withWeekday ? 'long' : undefined,
         day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC', calendar: 'gregory'
     });
 }
+/** An event date for reading, with the month spelled out ("sab 3 feb 2030"); typed dates keep the numeric dateFormatter. */
 export function formatDate(date: string, language: string | null | undefined) {
-    const day = new Date(`${date}T12:00:00Z`);
-    return `${dateFormatter(language, true).formatToParts(day).find(part => part.type === 'weekday')?.value} · ${dateFormatter(language).format(day)}`;
+    return new Intl.DateTimeFormat(intlLocale(language), {
+        // Portuguese abbreviated months fall back to a numeric pattern in CLDR, so it spells them out.
+        weekday: 'short', day: 'numeric', month: intlLocale(language) === 'pt-PT' ? 'long' : 'short', year: 'numeric', timeZone: 'UTC', calendar: 'gregory'
+    }).format(new Date(`${date}T12:00:00Z`));
 }
 export function formatTime(time: string, locale: string | null | undefined) {
     return new Intl.DateTimeFormat(intlLocale(locale),{hour:'numeric',minute:'2-digit',timeZone:'UTC'}).format(new Date(`2000-01-01T${time}Z`));

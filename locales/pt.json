@@ -144,7 +144,21 @@
     "availableOf": "{count, plural, =0 {{n} / {total} disponíveis} one {{n} / {total} disponível} other {{n} / {total} disponíveis}}",
     "dateLetters": "DD MM AAAA",
     "openDatePicker": "Abrir o calendário",
-    "highlightedDate": "Data destacada"
+    "highlightedDate": "Data destacada",
+    "duplicateDate": "Esta data já está na lista. Escolhe outra ou remove a linha.",
+    "endBeforeStart": "A hora de fim tem de ser depois do início.",
+    "invalidTimezone": "Escolhe um fuso horário da lista, p. ex. Europe/Lisbon.",
+    "timezoneHint": "Procura uma cidade, p. ex. Europe/Lisbon.",
+    "yourTime": "No teu fuso horário",
+    "messagePreview": "Pré-visualização",
+    "messageConfirmTitle": "Enviar a mensagem?",
+    "messageConfirmText": "{count, plural, one {{n} pessoa vai receber esta mensagem por email.} other {{n} pessoas vão receber esta mensagem por email.}}",
+    "adminLinkTitle": "A tua ligação de gestão",
+    "adminLinkNote": "Mantém-na privada: quem a tiver pode editar, confirmar ou cancelar o evento. Aos convidados envia a ligação acima.",
+    "retry": "Tentar novamente",
+    "createEvent": "Criar um evento",
+    "noPeopleOrganizer": "Ainda não há respostas. Partilha a ligação para recolher as disponibilidades.",
+    "calendarHeat": "Número e cor: pessoas disponíveis"
   },
   "pdf": {
     "invitation": "Carta de convite",

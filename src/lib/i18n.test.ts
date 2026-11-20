@@ -152,9 +152,20 @@ describe('date and time formatting', () => {
         expect(dateFormatter(undefined).resolvedOptions().locale).toBe(italian);
     });
 
-    it('prefixes the weekday', () => {
-        expect(formatDate('2031-04-27', 'it')).toBe('domenica · 27/04/2031');
-        expect(formatDate('2031-04-27', 'en')).toBe('Sunday · 27/04/2031');
+    it('spells out the weekday and month for reading', () => {
+        expect(formatDate('2030-02-03', 'it')).toBe('dom 3 feb 2030');
+        expect(formatDate('2031-04-27', 'en')).toBe('Sun, 27 Apr 2031');
+        expect(formatDate('2031-04-27', 'de')).toBe('So., 27. Apr. 2031');
+        expect(formatDate('2030-02-03', 'ar')).toBe('الأحد، ٣ فبراير ٢٠٣٠');
+    });
+
+    it('never prints a numeric month, Portuguese included', () => {
+        for (const language of Object.keys(languages)) expect(formatDate('2030-02-03', language), language).not.toMatch(/[\/.-]0?2[\/.-]/);
+        expect(formatDate('2030-02-03', 'pt')).toContain('fevereiro');
+    });
+
+    it('formats the date in UTC so it never shifts a day', () => {
+        expect(formatDate('2030-12-31', 'it')).toBe('mar 31 dic 2030');
     });
 
     it('formats times without shifting them', () => {

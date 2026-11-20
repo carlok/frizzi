@@ -18,3 +18,16 @@ export function datesChanged(saved: Slot[], drafts: SlotDraft[]) {
         [slot.id || '', slot.date, slot.start.slice(0, 5), slot.end?.slice(0, 5) || ''].join(' ');
     return saved.map(row).sort().join('\n') !== drafts.map(row).sort().join('\n');
 }
+
+export type SlotProblem = 'duplicateDate' | 'endBeforeStart';
+
+/** What is wrong with each date row, keyed by row key: a date an earlier row already uses, or an end time not after the start. */
+export function slotProblems(slots: SlotDraft[]) {
+    const problems = new Map<number, SlotProblem>(), seen = new Set<string>();
+    for (const slot of slots) {
+        if (slot.date && seen.has(slot.date)) problems.set(slot.key, 'duplicateDate');
+        else if (slot.end && slot.start && slot.end <= slot.start) problems.set(slot.key, 'endBeforeStart');
+        seen.add(slot.date);
+    }
+    return problems;
+}

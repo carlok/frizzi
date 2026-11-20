@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dateOrder, datePlaceholder, firstWeekday, readDate, type DatePart } from './dates.ts';
+import { dateOrder, minuteOptions, datePlaceholder, firstWeekday, readDate, type DatePart } from './dates.ts';
 import { dateFormatter, intlLocale, languages } from './i18n.ts';
 
 const example = new Date('2031-04-27T12:00:00Z');
@@ -16,7 +16,7 @@ describe('dateOrder', () => {
     });
 
     it('ignores literals and other parts', () => {
-        expect(dateOrder(dateFormatter('de', true).formatToParts(example))).toEqual(dmy);
+        expect(dateOrder(new Intl.DateTimeFormat('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }).formatToParts(example))).toEqual(dmy);
     });
 });
 
@@ -145,5 +145,21 @@ describe('readDate', () => {
         expect(readDate('2031/04/27', dmy)).toBe('');
         expect(readDate('27/04/2031', ymd)).toBe('');
         expect(readDate('2031-4-27', ymd)).toBe('2031-04-27');
+    });
+});
+
+describe('minuteOptions', () => {
+    it('offers five-minute steps', () => {
+        expect(minuteOptions()).toEqual(['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55']);
+        expect(minuteOptions('30')).toHaveLength(12);
+    });
+
+    it('keeps a saved minute that is off the grid, in order', () => {
+        expect(minuteOptions('07')).toEqual(['00', '05', '07', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55']);
+        expect(minuteOptions('59').at(-1)).toBe('59');
+    });
+
+    it('ignores values that are not minutes', () => {
+        for (const value of ['', '7', '60', 'ab', '5x']) expect(minuteOptions(value), value).toHaveLength(12);
     });
 });

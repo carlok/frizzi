@@ -1,6 +1,6 @@
 <script lang="ts">
  import { ChevronLeft, ChevronRight } from '@lucide/svelte';
- import { formatDate, formatTime, intlLocale, lang, t } from '#lib/i18n.ts';
+ import { formatDate, formatTime, intlLocale, lang, plural, t } from '#lib/i18n.ts';
  import { firstWeekday } from '#lib/dates.ts';
  import type { Slot } from '#lib/types.ts';
 
@@ -16,6 +16,9 @@
  export let mirrored = false;
  /** Legend for the marked days: the person's choices, or the date the organizer is looking at. */
  export let markedLabel = '';
+ /** Availability per slot id; with participants, days are tinted by their share and show their count. */
+ export let counts: Map<string, number> = new Map();
+ export let total = 0;
 
  function monthDays(month: string, firstDay: number) {
    const date = new Date(`${month}-01T12:00:00Z`);
@@ -64,15 +67,18 @@
     {@const confirmed = slot?.id === confirmedId}
     {@const dayNumber = day ? numbers.format(Number(day.slice(-2))) : ''}
     {#if day && slot}
-     {@const label = `${formatDate(day,language)} · ${formatTime(slot.start,language)}${slot.end ? ' – '+formatTime(slot.end,language) : ''}${confirmed ? ' · '+$t.confirmedDate : ''}`}
+     {@const count = counts.get(slot.id) || 0}
+     {@const label = `${formatDate(day,language)} · ${formatTime(slot.start,language)}${slot.end ? ' – '+formatTime(slot.end,language) : ''}${total ? ' · '+$plural('availableCount',count) : ''}${confirmed ? ' · '+$t.confirmedDate : ''}`}
+     {@const share = total ? count / total : 0}
      {#if interactive}
-      <button type="button" class="calendar-day proposed" class:marked={pressed} class:confirmed
+      <button type="button" class="calendar-day proposed" class:marked={pressed} class:confirmed style:--share={share}
         data-calendar-date={day} aria-label={label} aria-pressed={pressed} title={label} disabled={busy} tabindex={mirrored ? -1 : undefined}
-        on:click={()=>choose(slot.id)}>{dayNumber}</button>
+        on:click={()=>choose(slot.id)}>{dayNumber}{#if count}<span class="day-count" aria-hidden="true">{numbers.format(count)}</span>{/if}</button>
      {:else}
-      <span class="calendar-day proposed" class:marked={pressed} class:confirmed
+      <span class="calendar-day proposed" class:marked={pressed} class:confirmed style:--share={share}
         data-calendar-date={day} title={label}>
        <span aria-hidden="true">{dayNumber}</span>
+       {#if count}<span class="day-count" aria-hidden="true">{numbers.format(count)}</span>{/if}
        <span class="sr-only">{label}{pressed ? ' · '+$t.selectedDates : ''}</span>
       </span>
      {/if}
@@ -83,6 +89,7 @@
   </div>
   <ul class="calendar-legend">
    <li class="calendar-key proposed">{$t.proposedDates}</li>
+   {#if total}<li class="calendar-key heat">{$t.calendarHeat}</li>{/if}
    {#if interactive || selected.length}<li class="calendar-key marked">{markedLabel || $t.selectedDates}</li>{/if}
    {#if confirmedId}<li class="calendar-key confirmed">{$t.confirmedDate}</li>{/if}
   </ul>
