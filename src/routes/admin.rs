@@ -10,7 +10,7 @@ use axum::{
 use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use super::events::get_event;
@@ -50,6 +50,39 @@ async fn authorize_admin(pool: &PgPool, public: &str, secret: &str) -> Result<Uu
         .map_err(db)?
         .ok_or_else(missing)
 }
+/// The organizer's event, locked for the rest of the transaction.
+#[derive(sqlx::FromRow)]
+struct LockedEvent {
+    id: Uuid,
+    title: String,
+    description: Option<String>,
+    location: String,
+    organizer_name: String,
+    allow_multiple_choices: bool,
+    status: Status,
+    confirmed_slot_id: Option<Uuid>,
+    timezone: String,
+    voting_deadline: Option<NaiveDate>,
+    location_geo: Option<sqlx::types::Json<LocationGeo>>,
+}
+/// Locks the event behind a valid organizer link. This re-checks the link inside the
+/// transaction, so the event cannot change or disappear between authorization and the write.
+///
+/// The writes that also call [`authorize_admin`] do so before the transaction because their rate
+/// limits are keyed on the event id and must commit even when the write later fails.
+async fn lock_admin_event(
+    tx: &mut Transaction<'_, Postgres>,
+    public: &str,
+    secret: &str,
+) -> Result<LockedEvent, ApiError> {
+    sqlx::query_as("SELECT id,title,description,location,organizer_name,allow_multiple_choices,status::text,confirmed_slot_id,timezone,voting_deadline,location_geo FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE")
+        .bind(public)
+        .bind(secret)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db)?
+        .ok_or_else(missing)
+}
 #[derive(Deserialize)]
 pub(super) struct StatusInput {
     status: String,
@@ -75,9 +108,8 @@ pub(super) async fn update_status(
         None => None,
     };
     let mut tx = pool.begin().await.map_err(db)?;
-    let e = sqlx::query("SELECT id,status::text,confirmed_slot_id FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE")
-        .bind(&public).bind(&secret).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
-    let id: Uuid = e.get("id");
+    let e = lock_admin_event(&mut tx, &public, &secret).await?;
+    let id = e.id;
     if let Some(slot) = v.confirmed_slot_id {
         let belongs: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM event_slots WHERE id=$1 AND event_id=$2)",
@@ -91,8 +123,7 @@ pub(super) async fn update_status(
             return Err(bad());
         }
     }
-    let changed = e.get::<Status, _>("status") != status
-        || e.get::<Option<Uuid>, _>("confirmed_slot_id") != v.confirmed_slot_id;
+    let changed = e.status != status || e.confirmed_slot_id != v.confirmed_slot_id;
     if changed {
         limit_notifications(&mut tx, id).await?;
     }
@@ -127,17 +158,9 @@ pub(super) async fn update_tiebreak(
         return Err(missing());
     }
     let mut tx = pool.begin().await.map_err(db)?;
-    let event = sqlx::query(
-        "SELECT id,status::text FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE",
-    )
-    .bind(public)
-    .bind(secret)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(db)?
-    .ok_or_else(missing)?;
-    let id = event.get("id");
-    if event.get::<Status, _>("status") != Status::Open {
+    let event = lock_admin_event(&mut tx, &public, &secret).await?;
+    let id = event.id;
+    if event.status != Status::Open {
         return Err(error(StatusCode::CONFLICT, "event_closed"));
     }
     if let Some(slot) = input.slot_id {
@@ -196,16 +219,8 @@ pub(super) async fn message_participants(
     )
     .await?;
     let mut tx = pool.begin().await.map_err(db)?;
-    let event = sqlx::query(
-        "SELECT id,title FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE",
-    )
-    .bind(&public)
-    .bind(&secret)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(db)?
-    .ok_or_else(missing)?;
-    let id: Uuid = event.get("id");
+    let event = lock_admin_event(&mut tx, &public, &secret).await?;
+    let id = event.id;
     let existing: Option<i32> = sqlx::query_scalar(
         "SELECT recipients FROM participant_messages WHERE event_id=$1 AND request_id=$2",
     )
@@ -219,14 +234,9 @@ pub(super) async fn message_participants(
         schedule_mail(pool, runtime);
         return Ok(Json(json!({"queued": queued})));
     }
-    let queued = mail::enqueue_participant_message(
-        &mut tx,
-        id,
-        &public,
-        &event.get::<String, _>("title"),
-        input.message.trim(),
-    )
-    .await?;
+    let queued =
+        mail::enqueue_participant_message(&mut tx, id, &public, &event.title, input.message.trim())
+            .await?;
     if queued == 0 {
         return Err(error(StatusCode::CONFLICT, "no_participants"));
     }
@@ -285,16 +295,13 @@ pub(super) async fn update_details(
     let event = authorize_admin(&pool, &public, &secret).await?;
     rate_limit(&pool, &format!("details:{event}"), DETAILS_WRITES_PER_EVENT).await?;
     let mut tx = pool.begin().await.map_err(db)?;
-    let old = sqlx::query("SELECT id,title,description,location,organizer_name,allow_multiple_choices,timezone,voting_deadline,location_geo FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE")
-        .bind(public).bind(secret).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
-    let id: Uuid = old.get("id");
-    if old.get::<String, _>("timezone") != v.timezone {
+    let old = lock_admin_event(&mut tx, &public, &secret).await?;
+    let id = old.id;
+    if old.timezone != v.timezone {
         require_database_timezone(&mut tx, &v.timezone).await?;
     }
-    let old_location: String = old.get("location");
-    let old_geo = old
-        .get::<Option<sqlx::types::Json<LocationGeo>>, _>("location_geo")
-        .map(|geo| geo.0);
+    let old_location = old.location;
+    let old_geo = old.location_geo.map(|geo| geo.0);
     let geo = v.location_geo.unwrap_or_else(|| {
         if old_location == v.location.trim() {
             old_geo.clone()
@@ -305,7 +312,7 @@ pub(super) async fn update_details(
     if let Some(geo) = &geo {
         geo.validate()?;
     }
-    let old_deadline: Option<NaiveDate> = old.get("voting_deadline");
+    let old_deadline = old.voting_deadline;
     let deadline = v.voting_deadline.unwrap_or(old_deadline);
     if deadline != old_deadline {
         validate_deadline(deadline, &v.timezone)?;
@@ -337,15 +344,10 @@ pub(super) async fn update_details(
     }
     let mut changes: Vec<(String, String, String)> = Vec::new();
     for (key, before, after) in [
-        (
-            "title",
-            old.get::<String, _>("title"),
-            v.title.trim().to_string(),
-        ),
+        ("title", old.title, v.title.trim().to_string()),
         (
             "description",
-            old.get::<Option<String>, _>("description")
-                .unwrap_or_default(),
+            old.description.unwrap_or_default(),
             v.description.clone().unwrap_or_default(),
         ),
         (
@@ -355,14 +357,10 @@ pub(super) async fn update_details(
         ),
         (
             "organizer",
-            old.get::<String, _>("organizer_name"),
+            old.organizer_name,
             v.organizer_name.trim().to_string(),
         ),
-        (
-            "timezone",
-            old.get::<String, _>("timezone"),
-            v.timezone.clone(),
-        ),
+        ("timezone", old.timezone.clone(), v.timezone.clone()),
         (
             "votingDeadline",
             old_deadline
@@ -372,7 +370,7 @@ pub(super) async fn update_details(
         ),
         (
             "multiple",
-            old.get::<bool, _>("allow_multiple_choices").to_string(),
+            old.allow_multiple_choices.to_string(),
             v.allow_multiple_choices.to_string(),
         ),
     ] {
@@ -397,14 +395,14 @@ pub(super) async fn update_details(
     if notify {
         limit_notifications(&mut tx, id).await?;
     }
-    if dates_changed || old.get::<String, _>("timezone") != v.timezone {
+    if dates_changed || old.timezone != v.timezone {
         // A changed date/time is a new availability question; preserve only unaffected votes.
         sqlx::query("UPDATE events SET status='OPEN',confirmed_slot_id=NULL,tiebreak_slot_id=NULL WHERE id=$1")
             .bind(id)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
-        if old.get::<String, _>("timezone") != v.timezone {
+        if old.timezone != v.timezone {
             sqlx::query(
                 "DELETE FROM votes WHERE slot_id IN (SELECT id FROM event_slots WHERE event_id=$1)",
             )
