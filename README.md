@@ -1,23 +1,35 @@
 # Frizzi
 
-Applicazione passwordless per organizzare eventi e raccogliere disponibilità. Il frontend usa SvelteKit, TypeScript, Tailwind e Lucide. L’API usa Rust e Axum, con PostgreSQL per i dati e Mailpit per le email di sviluppo.
+Frizzi is a passwordless app for organising events and finding a date that works for your guests. The organiser creates a poll and receives a private management link by email. Guests can see the group’s availability, vote and receive their own link to edit their response. The organiser can update the details, confirm a date, cancel the event or reopen voting. Frizzi sends localised notifications when details change.
 
-L'organizzatore crea l'evento e riceve il link privato via email. Gli invitati vedono le risposte pubbliche, votano e ricevono il proprio link di modifica. L'organizzatore può modificare i dettagli, confermare una data, annullare o riaprire il sondaggio. Gli aggiornamenti inviano notifiche localizzate con le modifiche precedenti e successive. Email e token privati non sono inclusi nell'API pubblica.
+The frontend uses SvelteKit, TypeScript, Tailwind CSS and Lucide. The API uses Rust and Axum, with PostgreSQL for storage and Mailpit for development email. The public API keeps email addresses and private tokens out of its responses.
 
-## Struttura del progetto
+[Open Frizzi](https://frizzi.bid/)
 
-| Percorso | Contenuto |
+## Home page
+
+<p>
+  <a href="docs/screenshots/home-desktop.png"><img src="docs/screenshots/home-desktop.png" alt="Frizzi’s English home page on desktop, showing the event creation form" width="700"></a>
+</p>
+
+<p>
+  <a href="docs/screenshots/home-mobile.png"><img src="docs/screenshots/home-mobile.png" alt="Frizzi’s English home page on mobile, with the form arranged in a single column" width="300"></a>
+</p>
+
+## Project structure
+
+| Path | Contents |
 | --- | --- |
-| `src/routes/` e `src/lib/` | Pagine, componenti e logica frontend |
-| `src/*.rs` e `src/mail/` | API, email, tracciamento e manutenzione |
-| `api/index.rs` | Ingresso dell’API per Vercel |
-| `migrations/` | Migrazioni PostgreSQL |
-| `locales/` | Dizionari di interfaccia ed email |
-| `tests/` | Test di integrazione e browser |
+| `src/routes/` and `src/lib/` | Pages, components and frontend logic |
+| `src/*.rs` and `src/mail/` | API, email, telemetry and maintenance |
+| `api/index.rs` | Vercel entry point for the API |
+| `migrations/` | PostgreSQL migrations |
+| `locales/` | Interface and email translations |
+| `tests/` | Integration and browser tests |
 
-## Avvio con Docker
+## Run locally with Docker
 
-Servono Node.js 22.12+ (o 24+), npm, Rust stabile e Docker Compose.
+You need Node.js 22.12+ (or 24+), npm, stable Rust and Docker Compose.
 
 ```sh
 test -f .env || install -m 600 .env.example .env
@@ -27,13 +39,13 @@ cargo run --bin migrate
 npm run dev:full
 ```
 
-Aprire http://localhost:5173. La UI Mailpit è su http://localhost:8025. L'API Rust ascolta su `127.0.0.1:3001`; Vite inoltra `/api`. `cargo run --bin migrate` applica le migrazioni SQLx senza dover installare un altro strumento. In alternativa si può usare `sqlx migrate run` dopo aver installato `sqlx-cli`.
+Open [Frizzi](http://localhost:5173) and [Mailpit](http://localhost:8025). The Rust API listens on `127.0.0.1:3001`, and Vite proxies requests under `/api`. The migration command applies the SQLx migrations directly. If you already have `sqlx-cli`, you can also run `sqlx migrate run`.
 
-`npm run dev:full` avvia backend e frontend insieme. Per lo sviluppo separato: `cargo run --bin local` e `npm run dev`. Il frontend usa il ricaricamento automatico; riavviare il backend dopo modifiche Rust, oppure usare `cargo watch -x 'run --bin local'`.
+`npm run dev:full` starts both the API and the frontend. To run them separately, use `cargo run --bin local` and `npm run dev`. The frontend reloads automatically. Restart the API after Rust changes or use `cargo watch -x 'run --bin local'`.
 
-## Avvio senza privilegi amministrativi
+## Run locally without Docker
 
-Se l'ambiente non consente Docker, si possono usare gli stessi servizi come processi utente:
+On Linux x86-64, you can run PostgreSQL 16 and Mailpit as user processes without administrator privileges.
 
 ```sh
 test -f .env || install -m 600 .env.example .env
@@ -41,9 +53,9 @@ npm ci
 npm run services:native
 ```
 
-Lo script usa PostgreSQL 16, installato tramite `embedded-postgres`, e Mailpit, scaricato dalla release ufficiale. La versione del database resta PostgreSQL reale. I dati locali persistono in `~/.cache/frizzi/postgres-16`.
+The script uses `embedded-postgres` and the official Mailpit release. PostgreSQL data persists in `~/.cache/frizzi/postgres-16`.
 
-Configurare `.env` con queste porte e mantenere `APP_URL` e `MAIL_FROM` come nell’esempio.
+Set these values in `.env` and keep `APP_URL` and `MAIL_FROM` as shown in the example.
 
 ```dotenv
 DATABASE_URL=postgres://frizzi:frizzi@localhost:55432/frizzi
@@ -51,37 +63,33 @@ SMTP_HOST=localhost
 SMTP_PORT=11025
 ```
 
-In un altro terminale eseguire `cargo run --bin migrate` e `npm run dev:full`. Mailpit è su http://localhost:18025.
+In a second terminal, run `cargo run --bin migrate` followed by `npm run dev:full`. [Mailpit](http://localhost:18025) runs on port 18025 in this setup.
 
-## Lingue
+## Languages
 
-Sono presenti italiano, inglese, spagnolo, cinese semplificato, hindi, arabo, francese, bengalese, portoghese, russo e tedesco. La lingua predefinita è italiano; il selettore persiste la scelta nel browser e imposta RTL per l'arabo. Le operazioni di organizzatori e partecipanti salvano la lingua nel database.
+Frizzi supports Italian, English, Spanish, Simplified Chinese, Hindi, Arabic, French, Bengali, Portuguese, Russian and German. Italian is the default. The language selector saves the choice in the browser and switches to a right-to-left layout for Arabic. Frizzi also saves each organiser’s and guest’s chosen language for email notifications.
 
-I dizionari JSON in `locales/` sono condivisi da `svelte-i18n` e `rust-i18n`. Date e orari usano `Intl.DateTimeFormat` nel browser e `chrono` con locale nelle email. I contenuti inseriti dagli utenti restano nella lingua originale. Le traduzioni sono redatte per questa applicazione; non sono una revisione linguistica professionale.
+The JSON dictionaries in `locales/` are shared by `svelte-i18n` and `rust-i18n`. Dates and times follow the chosen locale in the browser and in emails. User-provided content stays in its original language. The translations have yet to receive a professional review.
 
-## Autocompletamento del luogo
+## Location autocomplete
 
-Impostare `GEOAPIFY_API_KEY` nel file `.env` locale o nelle variabili server di Vercel.
-La chiave è usata lato server. Il backend limita le ricerche a 120 per ora per istanza
-del database; tenere conto anche degli altri progetti che usano la stessa quota.
-Il campo continua ad accettare indirizzi, nomi e link scritti a mano anche
-in assenza di una chiave o se il servizio di ricerca non risponde.
+Set `GEOAPIFY_API_KEY` in your local `.env` or in your hosting provider’s server-side environment variables. The backend limits autocomplete to 120 searches per hour across the database. Consider this limit alongside any other projects that share the provider quota. Organisers can enter addresses, venue names and links manually when autocomplete is unavailable.
 
-## Consegna delle email
+## Email delivery
 
-Le operazioni salvano messaggi e dati nella stessa transazione. Dopo il commit tentano la consegna. Un errore SMTP o Resend lascia il messaggio in coda, con ritentativi progressivi. In locale un worker controlla la coda ogni dieci secondi. Su Vercel il cron incluso ritenta ogni giorno alle 06:00 UTC; per ritentativi più frequenti, impostare uno scheduler compatibile con il proprio piano.
+Frizzi saves email jobs in the same database transaction as the operation that triggered them. Delivery starts after the transaction commits. If SMTP or Resend fails, the job stays in the queue and Frizzi retries with increasing delays. The local worker checks the queue every ten seconds. On Vercel, the included cron is scheduled for 06:00 UTC daily. More frequent retries require a scheduler supported by your hosting plan.
 
-L'endpoint `GET /api/cron/email` richiede `Authorization: Bearer <CRON_SECRET>`. Sono elaborati al massimo 25 messaggi per chiamata. Resend riceve una chiave di idempotenza per ridurre i duplicati. SMTP offre consegna almeno una volta: in caso di arresto fra invio e registrazione dell'esito può esserci un duplicato. Gli indirizzi e i link nei messaggi consegnati vengono rimossi dalla coda.
+`GET /api/cron/email` requires `Authorization: Bearer <CRON_SECRET>` and processes up to 25 messages per call. Resend receives an idempotency key to reduce duplicates. SMTP provides at-least-once delivery, so an interruption between sending and recording success may result in a duplicate. Frizzi removes recipient addresses and links from the queue after successful submission to the provider.
 
-Modificare una data o un orario cancella soltanto le disponibilità su quel giorno e riapre il sondaggio; cambiare fuso orario invalida tutte le disponibilità. I voti sulle date rimaste uguali vengono conservati. Se qualcuno ha già scelto più date, non è possibile passare alla scelta singola senza prima aggiornare le risposte.
+Changing a proposed date or time clears the votes for that option and reopens the poll. Changing the time zone clears all votes. Unchanged options keep their votes. Switching to single-choice voting requires updating any existing responses that selected multiple dates.
 
-## Configurazione locale
+## Environment variables
 
-Il file [`.env.example`](.env.example) contiene i valori di sviluppo e i nomi delle variabili lato server. Conservare i valori reali in `.env` con permessi `0600` o nelle variabili protette dell’hosting. Il database e la casella di test di Docker sono esposti solo su loopback.
+[`.env.example`](.env.example) lists the server-side environment variables and safe development defaults. Keep real credentials in a local `.env` file with permissions `0600` or in your hosting provider’s secret store. The Docker database and test mailbox bind only to loopback.
 
-Per abilitare gli allegati PDF, impostare `FRIZZI_TYPST` e `FRIZZI_PDF_FONTS`. Lo [script di installazione](deploy/setup-invitation-pdf.py) prepara il binario e i font su Linux x86-64. In assenza di Typst, la conferma viene inviata in HTML e testo.
+To enable PDF invitations, set `FRIZZI_TYPST` and `FRIZZI_PDF_FONTS`. The [Typst setup script](deploy/setup-invitation-pdf.py) installs the renderer and fonts on Linux x86-64. Frizzi sends the HTML and plain-text confirmation when Typst is unavailable.
 
-## Verifiche
+## Checks
 
 ```sh
 npm run test:setup
@@ -92,10 +100,10 @@ npm test
 npm audit
 ```
 
-Su un sistema Linux senza le librerie richieste dal browser, installarle con `npx playwright install-deps chromium`. Il test usa anche le eventuali librerie locali già preparate in `~/.cache/frizzi/browser-libs`.
+If Chromium’s dependencies are missing on Linux, install them with `npx playwright install-deps chromium`. The suite also uses any browser libraries already installed in `~/.cache/frizzi/browser-libs`.
 
-`npm test` crea un database PostgreSQL 16 temporaneo e avvia Mailpit, Rust e Vite su porte dedicate. I test controllano creazione, privacy, autorizzazione, isolamento fra eventi, validazione, unicità delle email, voto, modifica dei dettagli, conservazione dei voti, notifiche localizzate e ritentativi dopo un guasto SMTP. I controlli browser attraversano le undici lingue, RTL, persistenza, creazione, voto, modifica, conferma e layout mobile. Screenshot in `test-results/`. Le email di test restano locali: la chiave Resend non viene utilizzata.
+`npm test` starts a temporary PostgreSQL 16 database, Mailpit, the Rust API and Vite on dedicated ports. Integration tests cover event creation, privacy, authorisation, isolation between events, voting, edits, localised notifications and SMTP retries. Browser checks cover all eleven languages, right-to-left layout, language persistence, the event workflow and mobile rendering. Screenshots go to `test-results/`. Test emails stay in the local Mailpit inbox.
 
-## Conservazione
+## Retention
 
-I sondaggi restano disponibili fino al termine del decimo giorno successivo alla data dell’evento nel suo fuso orario. Senza una data confermata si usa l’ultima proposta. La manutenzione elimina i dati scaduti e ruota i conteggi aggregati d’uso. L’API emette log JSON e, con `FRIZZI_LOG_DIR`, usa file giornalieri con rotazione locale.
+Polls remain available through the end of the tenth day after the event date, in the event’s time zone. If the organiser has not confirmed a date, the latest proposed date applies. Maintenance deletes expired event data and rotates aggregate usage metrics. The API emits structured JSON logs. Set `FRIZZI_LOG_DIR` to write the logs to daily files with local rotation.
