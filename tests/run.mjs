@@ -313,7 +313,16 @@ try{
  await emailPreview.setContent(confirmation.HTML);
  check(await emailPreview.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Confirmation email fits a narrow screen');
  await emailPreview.close();
- const page=await browser.newPage();
+ const page=await browser.newPage({locale:'it-IT'});
+ for(const [locale,code] of [['de-AT','de'],['ar-EG','ar']]){
+  const visitor=await browser.newPage({locale});
+  await visitor.addInitScript(()=>new MutationObserver((_,observer)=>{if(document.body){window.firstPaint=[document.documentElement.lang,document.documentElement.dir];observer.disconnect();}}).observe(document,{childList:true,subtree:true}));
+  await visitor.goto(web);await visitor.waitForSelector('header[data-ready="true"]');
+  const dictionary=JSON.parse(await readFile(`locales/${code}.json`,'utf8'));
+  await visitor.getByRole('heading',{name:dictionary.ui.create,exact:true}).waitFor();
+  check((await visitor.evaluate(()=>window.firstPaint.join()))===`${code},${code==='ar'?'rtl':'ltr'}`&&await visitor.evaluate(()=>localStorage.getItem('locale'))===null,`First visit follows the ${locale} browser before the first paint without saving it`);
+  await visitor.close();
+ }
  await page.goto(web);
  await page.locator('footer').getByRole('link',{name:'Informativa sulla privacy'}).click();
  await page.getByRole('heading',{name:'Informativa sulla privacy'}).waitFor();
@@ -322,7 +331,7 @@ try{
    Object.defineProperty(navigator,'share',{value:async data=>localStorage.setItem('sharedEvent',JSON.stringify(data))});
  });
  const browserErrors=[];page.on('pageerror',error=>browserErrors.push(error.message));
- const unavailable=await browser.newPage();
+ const unavailable=await browser.newPage({locale:'it-IT'});
  await unavailable.route('**/api/events/*',route=>route.fulfill({status:502,contentType:'text/html',body:'<h1>Bad gateway</h1>'}));
  await unavailable.goto(web+retentionPath.replace('/api/events',''));
  await unavailable.getByText('Il servizio è temporaneamente indisponibile. Riprova tra poco.').waitFor();
@@ -358,7 +367,7 @@ try{
  await locationInput.press('Enter');
  check(await locationInput.inputValue()===venue.label,'Keyboard selects and retains the correct venue');
  const dateInput=page.locator('[name="date-0"]');
- check(await dateInput.getAttribute('placeholder')==='DD/MM/YYYY','Italian date field uses day/month/year with the default browser locale');
+ check(await dateInput.getAttribute('placeholder')==='GG/MM/AAAA','Italian date field spells day/month/year in Italian');
  await dateInput.fill('31/02/2030');
  check(await dateInput.evaluate(input=>!input.checkValidity()),'Localized date rejects an impossible day');
  await dateInput.fill('31032030');
@@ -459,6 +468,7 @@ try{
  await page.getByRole('button',{name:'Invia disponibilità',exact:true}).click();
  await page.getByRole('status').filter({hasText:'Risposta salvata'}).waitFor();
  check(await page.evaluate(()=>document.querySelector('.event-header')?.dataset.mounted==='yes'&&window.clickScroll>0&&scrollY>0),'Saving a vote refreshes the results without remounting the page or jumping to the top');
+ check((await page.locator('.result>span').allTextContents()).join('|')==='1 disponibile|0 disponibili','Vote counts use Italian singular and plural forms');
  await until(async()=>{
   const stats=await client.query("SELECT count(*) FROM usage_metrics WHERE (action, outcome) IN (('create_event','ok'),('event_location','suggested'),('vote_selection','both'),('share','native'),('browser_error','invalid_response'))");
   return stats.rows[0].count==='5';
@@ -493,7 +503,7 @@ try{
  await page.getByRole('button',{name:'Grassetto',exact:true}).click();
  check(await messageBox.inputValue()==='<b>Ci vediamo domani!</b>','Organizer can format selected text');
  await page.getByRole('button',{name:'Invia messaggio',exact:true}).click();
- await page.getByRole('status').filter({hasText:'Email in coda'}).waitFor();
+ await page.getByRole('status').filter({hasText:'1 email in coda'}).waitFor();
  check((await messageFor('browser-guest@example.test','💌 Una novità per te!')).HTML.includes('<b>Ci vediamo domani!</b>'),'Admin composer delivers the formatted message');
  await page.getByRole('button',{name:'Mese successivo',exact:true}).click();
  await aprilDay.click();

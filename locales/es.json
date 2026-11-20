@@ -8,7 +8,7 @@
     "messageFormatting": "Selecciona el texto para darle formato. Máximo 2000 caracteres.",
     "sendParticipantMessage": "Enviar mensaje",
     "messageRecipients": "Destinatarios",
-    "messageQueued": "Correos en cola",
+    "messageQueued": "{count, plural, one {{n} correo en cola} other {{n} correos en cola}}",
     "privacyTitle": "Aviso de privacidad",
     "privacyCommercial": "Frizzi nunca vende datos personales ni direcciones de correo electrónico ni los usa para publicidad, marketing u otros fines comerciales.",
     "privacyUse": "Usamos los datos para organizar el evento, recoger la disponibilidad, enviar los correos del evento y prevenir abusos. Quien tenga el enlace puede ver los nombres y la disponibilidad de los participantes. Las direcciones de correo son privadas.",
@@ -54,7 +54,6 @@
     "saved": "Respuesta guardada. Revisa tu correo para obtener tu enlace privado.",
     "people": "Las respuestas",
     "noPeople": "Aún no hay respuestas. ¿Serás el primero?",
-    "available": "disponibles",
     "organized": "Organizado por",
     "admin": "Gestionar evento",
     "confirm": "Confirmar esta fecha",
@@ -140,7 +139,10 @@
     "goBack": "Volver",
     "copyFailed": "No se pudo copiar el enlace. Selecciónalo y cópialo a mano.",
     "pageNotFound": "Página no encontrada",
-    "errorTitle": "Algo salió mal"
+    "errorTitle": "Algo salió mal",
+    "availableCount": "{count, plural, one {{n} disponible} other {{n} disponibles}}",
+    "availableOf": "{count, plural, one {{n} / {total} disponible} other {{n} / {total} disponibles}}",
+    "dateLetters": "DD MM AAAA"
   },
   "pdf": {
     "invitation": "Carta de invitación",

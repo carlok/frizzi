@@ -3,7 +3,7 @@
  import { page } from '$app/state';
  import { afterNavigate } from '$app/navigation';
  import { ArrowUpRight, Check, CircleCheck, CircleX, Copy, LockKeyhole, MapPin, Clock, Navigation, Users, Share2, CalendarDays, CalendarClock, PartyPopper, Star, Vote } from '@lucide/svelte';
- import { lang, t, errorText, formatDate, formatTime, intlLocale } from '#lib/i18n.ts';
+ import { lang, t, plural, errorText, formatDate, formatTime, intlLocale } from '#lib/i18n.ts';
  import { track } from '#lib/telemetry.ts';
  import * as poll from '#lib/poll.ts';
  import { parsePath } from '#lib/route.ts';
@@ -381,7 +381,7 @@
        <span>
         <strong><time datetime={slot.date}>{formatDate(slot.date,$lang)}</time></strong>
         <small>{formatTime(slot.start,$lang)}{slot.end?' – '+formatTime(slot.end,$lang):''}</small>
-        <small>{numbers.format(count)} / {numbers.format(event.participants.length)} {$t.available}{#if leading} · {$t.leadingDate}{/if}</small>
+        <small>{$plural('availableOf',count,{total:event.participants.length})}{#if leading} · {$t.leadingDate}{/if}</small>
        </span>
       </div>
       <Button id={`confirm-${slot.id}`} variant="outline" class="small-button" disabled={busy || tiebreakSaving || event.confirmed_slot_id===slot.id} onclick={()=>setStatus('CONFIRMED',slot.id)}>{$t.confirm}</Button>
@@ -442,7 +442,7 @@
        <div class="leaders-title">
         <PartyPopper size={21} aria-hidden="true"/>
         <h3 id="result-leaders-heading">{decisiveSlot?$t.tiebreakWinner:leadingSlots.length===1?$t.topDate:$t.tiedDates}</h3>
-        <span class="leaders-count">{numbers.format(maxVotes)} / {numbers.format(event.participants.length)} {$t.available}</span>
+        <span class="leaders-count">{$plural('availableOf',maxVotes,{total:event.participants.length})}</span>
        </div>
        <ul>
         {#each leadingSlots as slot (slot.id)}
@@ -468,7 +468,7 @@
       {@const count=voteCounts.get(slot.id)||0}
       <div class="result"><strong>{formatDate(slot.date,$lang)}</strong>
        {#if event.status==='CONFIRMED' && decisiveSlot?.id===slot.id}<span class="tiebreak-badge"><Star size={14} aria-hidden="true"/>{$t.tiebreakBadge}</span>{/if}
-       <span>{numbers.format(count)} {$t.available}</span><div class="bar"><i style={`width:${100*count/event.participants.length}%`}></i></div><small>{event.participants.filter(p=>p.slots.includes(slot.id)).map(p=>p.name).join(', ')}</small>
+       <span>{$plural('availableCount',count)}</span><div class="bar"><i style={`width:${100*count/event.participants.length}%`}></i></div><small>{event.participants.filter(p=>p.slots.includes(slot.id)).map(p=>p.name).join(', ')}</small>
       </div>
      {/each}</div>
     {/if}

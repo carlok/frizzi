@@ -8,7 +8,7 @@
     "messageFormatting": "选中要设置格式的文字。最多 2000 个字符。",
     "sendParticipantMessage": "发送消息",
     "messageRecipients": "收件人",
-    "messageQueued": "已进入发送队列的邮件",
+    "messageQueued": "{count, plural, other {{n} 封邮件已进入发送队列}}",
     "privacyTitle": "隐私声明",
     "privacyCommercial": "Frizzi 从不出售个人数据或电子邮件地址，也绝不会将其用于广告、营销或其他商业用途。",
     "privacyUse": "我们使用您提供的信息来组织活动、收集可参加时间、发送相关邮件并防止滥用。拥有活动链接的人可以查看参与者的姓名和可参加时间。电子邮件地址不会公开。",
@@ -54,7 +54,6 @@
     "saved": "回复已保存。请查收邮件，获取你的专属链接。",
     "people": "回复",
     "noPeople": "还没有回复。你愿意第一个回复吗？",
-    "available": "人有空",
     "organized": "组织者",
     "admin": "管理活动",
     "confirm": "确认此日期",
@@ -140,7 +139,10 @@
     "goBack": "返回",
     "copyFailed": "无法复制链接。请选中链接后手动复制。",
     "pageNotFound": "页面未找到",
-    "errorTitle": "出了点问题"
+    "errorTitle": "出了点问题",
+    "availableCount": "{count, plural, other {{n} 人有空}}",
+    "availableOf": "{count, plural, other {{n} / {total} 人有空}}",
+    "dateLetters": "日 月 年"
   },
   "pdf": {
     "invitation": "邀请函",

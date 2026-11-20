@@ -1,7 +1,7 @@
 <script lang="ts">
  import { Bold, Italic, Mail, Send, Underline } from '@lucide/svelte';
  import { Button } from '#lib/components/ui/button/index.ts';
- import { errorText, intlLocale, lang, t } from '#lib/i18n.ts';
+ import { errorText, intlLocale, lang, plural, t } from '#lib/i18n.ts';
 
  export let recipients: number;
  export let send: (message: string, requestId: string) => Promise<{queued: number}>;
@@ -63,7 +63,7 @@
     <Button type="submit" disabled={sending||!message.trim()}><Send size={16}/>{sending?$t.loading:$t.sendParticipantMessage}</Button>
     <span class="fine">{$t.messageRecipients} <strong>{numbers.format(recipients)}</strong></span>
    </div>
-   {#if queued !== null}<p class="notice" role="status">{$t.messageQueued} <strong>{numbers.format(queued)}</strong></p>{/if}
+   {#if queued !== null}<p class="notice" role="status">{$plural('messageQueued',queued)}</p>{/if}
    {#if error}<p class="error" role="alert">{error==='no_participants'?$t.noPeople:errorText(error,$t)}</p>{/if}
   </form>
  {/if}

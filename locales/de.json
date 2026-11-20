@@ -8,7 +8,7 @@
     "messageFormatting": "Markiere den Text zum Formatieren. Höchstens 2.000 Zeichen.",
     "sendParticipantMessage": "Nachricht senden",
     "messageRecipients": "Empfänger",
-    "messageQueued": "E-Mails in der Warteschlange",
+    "messageQueued": "{count, plural, one {{n} E-Mail in der Warteschlange} other {{n} E-Mails in der Warteschlange}}",
     "privacyTitle": "Datenschutzhinweis",
     "privacyCommercial": "Frizzi verkauft niemals personenbezogene Daten oder E-Mail-Adressen und nutzt sie weder für Werbung noch für andere kommerzielle Zwecke.",
     "privacyUse": "Wir verwenden die Angaben zur Organisation der Veranstaltung, zur Abfrage der Verfügbarkeit, für zugehörige E-Mails und zur Missbrauchsprävention. Wer den Veranstaltungslink hat, kann Namen und Verfügbarkeiten sehen. E-Mail-Adressen bleiben privat.",
@@ -54,7 +54,6 @@
     "saved": "Antwort gespeichert. Deinen privaten Link findest du in deinem E-Mail-Postfach.",
     "people": "Die Antworten",
     "noPeople": "Noch keine Antworten. Mach den Anfang!",
-    "available": "verfügbar",
     "organized": "Organisiert von",
     "admin": "Event verwalten",
     "confirm": "Diesen Termin bestätigen",
@@ -140,7 +139,10 @@
     "goBack": "Zurück",
     "copyFailed": "Der Link konnte nicht kopiert werden. Markiere ihn und kopiere ihn manuell.",
     "pageNotFound": "Seite nicht gefunden",
-    "errorTitle": "Etwas ist schiefgelaufen"
+    "errorTitle": "Etwas ist schiefgelaufen",
+    "availableCount": "{count, plural, one {{n} verfügbar} other {{n} verfügbar}}",
+    "availableOf": "{count, plural, one {{n} / {total} verfügbar} other {{n} / {total} verfügbar}}",
+    "dateLetters": "TT MM JJJJ"
   },
   "pdf": {
     "invitation": "Einladung",

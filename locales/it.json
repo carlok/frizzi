@@ -8,7 +8,7 @@
     "messageFormatting": "Seleziona il testo da formattare. Massimo 2.000 caratteri.",
     "sendParticipantMessage": "Invia messaggio",
     "messageRecipients": "Destinatari",
-    "messageQueued": "Email in coda",
+    "messageQueued": "{count, plural, one {{n} email in coda} other {{n} email in coda}}",
     "privacyTitle": "Informativa sulla privacy",
     "privacyCommercial": "Frizzi non vende mai dati personali né indirizzi email e non li usa in alcun caso per pubblicità, marketing o altri scopi commerciali.",
     "privacyUse": "Usiamo i dati forniti per organizzare l’evento, raccogliere le disponibilità, inviare le relative email e proteggere il servizio da abusi. Chi ha il link dell’evento può vedere nomi e disponibilità dei partecipanti. Gli indirizzi email restano privati.",
@@ -54,7 +54,6 @@
     "saved": "Risposta salvata. Controlla la tua email per il link privato.",
     "people": "Le risposte",
     "noPeople": "Ancora nessuna risposta. Sarai il primo?",
-    "available": "disponibili",
     "organized": "Organizzato da",
     "admin": "Gestisci evento",
     "confirm": "Conferma questa data",
@@ -140,7 +139,10 @@
     "goBack": "Torna indietro",
     "copyFailed": "Impossibile copiare il link. Selezionalo e copialo a mano.",
     "pageNotFound": "Pagina non trovata",
-    "errorTitle": "Qualcosa è andato storto"
+    "errorTitle": "Qualcosa è andato storto",
+    "availableCount": "{count, plural, one {{n} disponibile} other {{n} disponibili}}",
+    "availableOf": "{count, plural, one {{n} / {total} disponibile} other {{n} / {total} disponibili}}",
+    "dateLetters": "GG MM AAAA"
   },
   "pdf": {
     "invitation": "Lettera d’invito",

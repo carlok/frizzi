@@ -1,7 +1,7 @@
 <script lang="ts">
  import { CalendarDays } from '@lucide/svelte';
  import { dateFormatter, lang, t } from '#lib/i18n.ts';
- import { dateOrder, readDate } from '#lib/dates.ts';
+ import { dateOrder, datePlaceholder, readDate } from '#lib/dates.ts';
 
  export let name: string;
  export let label: string;
@@ -19,12 +19,7 @@
  $: formatter = dateFormatter($lang);
  $: dateParts = formatter.formatToParts(example);
  $: order = dateOrder(dateParts);
- $: placeholder = dateParts.map(part => {
-   if (part.type === 'day') return 'DD';
-   if (part.type === 'month') return 'MM';
-   if (part.type === 'year') return 'YYYY';
-   return part.value;
- }).join('');
+ $: placeholder = datePlaceholder(dateParts, $t.dateLetters);
  $: if (value !== syncedValue || formatter !== syncedFormatter) {
    draft = value ? formatter.format(new Date(`${value}T12:00:00Z`)) : '';
    syncedValue = value;

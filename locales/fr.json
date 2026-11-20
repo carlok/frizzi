@@ -8,7 +8,7 @@
     "messageFormatting": "Sélectionne le texte à mettre en forme. Maximum 2 000 caractères.",
     "sendParticipantMessage": "Envoyer le message",
     "messageRecipients": "Destinataires",
-    "messageQueued": "E-mails en attente d’envoi",
+    "messageQueued": "{count, plural, one {{n} e-mail en attente d’envoi} other {{n} e-mails en attente d’envoi}}",
     "privacyTitle": "Avis de confidentialité",
     "privacyCommercial": "Frizzi ne vend jamais de données personnelles ni d’adresses e-mail et ne les utilise à aucune fin publicitaire, marketing ou commerciale.",
     "privacyUse": "Nous utilisons les informations fournies pour organiser l’événement, recueillir les disponibilités, envoyer les e-mails associés et prévenir les abus. Les personnes qui ont le lien de l’événement peuvent voir les noms et les disponibilités des participants. Les adresses e-mail restent privées.",
@@ -54,7 +54,6 @@
     "saved": "Réponse enregistrée. Consultez votre messagerie pour obtenir votre lien privé.",
     "people": "Les réponses",
     "noPeople": "Aucune réponse pour le moment. Serez-vous la première personne ?",
-    "available": "disponibles",
     "organized": "Organisé par",
     "admin": "Gérer l’événement",
     "confirm": "Confirmer cette date",
@@ -140,7 +139,10 @@
     "goBack": "Retour",
     "copyFailed": "Impossible de copier le lien. Sélectionnez-le et copiez-le manuellement.",
     "pageNotFound": "Page introuvable",
-    "errorTitle": "Un problème est survenu"
+    "errorTitle": "Un problème est survenu",
+    "availableCount": "{count, plural, one {{n} disponible} other {{n} disponibles}}",
+    "availableOf": "{count, plural, one {{n} / {total} disponible} other {{n} / {total} disponibles}}",
+    "dateLetters": "JJ MM AAAA"
   },
   "pdf": {
     "invitation": "Lettre d’invitation",

@@ -326,3 +326,6 @@ footer .privacy-link {
   font: 600 14px var(--font-ui);
   text-decoration: underline;
 }
+
+/* Negative tracking breaks Arabic joining and Indic conjuncts and crowds CJK; these scripts keep normal spacing. */
+:is(h1,h2,h3):is(:lang(ar),:lang(hi),:lang(bn),:lang(zh)){letter-spacing:normal}

@@ -7,6 +7,13 @@ export function dateOrder(parts: Intl.DateTimeFormatPart[]): DatePart[] {
         part.type === 'day' || part.type === 'month' || part.type === 'year').map(part => part.type);
 }
 
+/** The formatter's date pattern spelled with the language's letters for day, month and year, e.g. `GG MM AAAA`. */
+export function datePlaceholder(parts: Intl.DateTimeFormatPart[], letters: string) {
+    const [day, month, year] = letters.split(' ');
+    const names: Record<string, string> = { day, month, year };
+    return parts.map(part => names[part.type] ?? part.value).join('');
+}
+
 /** First day of the week for a regional locale, 0 for Sunday to 6 for Saturday; Monday when the runtime cannot tell. */
 export function firstWeekday(locale: string) {
     const local = new Intl.Locale(locale) as Intl.Locale & {

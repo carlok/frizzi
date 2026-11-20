@@ -8,7 +8,7 @@
     "messageFormatting": "Select the text you want to format. Up to 2,000 characters.",
     "sendParticipantMessage": "Send message",
     "messageRecipients": "Recipients",
-    "messageQueued": "Emails queued",
+    "messageQueued": "{count, plural, one {{n} email queued} other {{n} emails queued}}",
     "privacyTitle": "Privacy notice",
     "privacyCommercial": "Frizzi never sells personal data or email addresses and never uses them for advertising, marketing or any other commercial purpose.",
     "privacyUse": "We use the information you provide to organize the event, collect availability, send related emails and protect the service from abuse. Anyone with the event link can see participants’ names and availability. Email addresses stay private.",
@@ -54,7 +54,6 @@
     "saved": "Response saved. Check your email for your private link.",
     "people": "Responses",
     "noPeople": "No responses yet. Be the first?",
-    "available": "available",
     "organized": "Organized by",
     "admin": "Manage event",
     "confirm": "Confirm this date",
@@ -140,7 +139,10 @@
     "goBack": "Go back",
     "copyFailed": "Couldn’t copy the link. Select it and copy it manually.",
     "pageNotFound": "Page not found",
-    "errorTitle": "Something went wrong"
+    "errorTitle": "Something went wrong",
+    "availableCount": "{count, plural, one {{n} available} other {{n} available}}",
+    "availableOf": "{count, plural, one {{n} / {total} available} other {{n} / {total} available}}",
+    "dateLetters": "DD MM YYYY"
   },
   "pdf": {
     "invitation": "Your invitation",

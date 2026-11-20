@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { get } from 'svelte/store';
-import { dateFormatter, errorText, formatDate, formatTime, intlLocale, lang, languages, t } from './i18n.ts';
+import { dateFormatter, detectLocale, errorText, formatDate, formatTime, intlLocale, lang, languages, plural, pluralKeys, t, type PluralKey } from './i18n.ts';
 import it_ from '../../locales/it.json';
 import en from '../../locales/en.json';
 
@@ -53,22 +54,86 @@ describe('errorText', () => {
 });
 
 describe('t', () => {
-    afterEach(() => { lang.set('it'); });
+    afterEach(async () => { await lang.set('it'); });
 
-    it('starts in Italian with every UI key', () => {
+    it('starts in Italian with every UI key except the plural messages', () => {
         const messages = get(t);
         expect(get(lang)).toBe('it');
-        expect(Object.keys(messages).sort()).toEqual(Object.keys(ui).sort());
+        expect(Object.keys(messages).sort()).toEqual(Object.keys(ui).filter(key => !(pluralKeys as readonly string[]).includes(key)).sort());
         expect(messages.notFound).toBe(ui.notFound);
     });
 
-    it('follows the selected language', () => {
-        lang.set('en');
+    it('loads and follows the selected language', async () => {
+        await lang.set('en');
         expect(get(t).notFound).toBe(en.ui.notFound);
     });
 
     it('lists the eleven supported languages', () => {
         expect(Object.keys(languages)).toEqual(['it', 'en', 'es', 'zh', 'hi', 'ar', 'fr', 'bn', 'pt', 'ru', 'de']);
+    });
+});
+
+describe('plural', () => {
+    const dictionaries = import.meta.glob<typeof it_>('../../locales/*.json', { eager: true, import: 'default' });
+    const uiFor = (locale: string) => dictionaries[`../../locales/${locale}.json`].ui;
+    afterEach(async () => { await lang.set('it'); });
+
+    it.each<[string, PluralKey, number, Record<string, number>, string]>([
+        ['it', 'availableCount', 1, {}, '1 disponibile'], ['it', 'availableCount', 3, {}, '3 disponibili'],
+        ['it', 'availableOf', 1, { total: 4 }, '1 / 4 disponibile'], ['it', 'availableOf', 0, { total: 4 }, '0 / 4 disponibili'],
+        ['en', 'messageQueued', 1, {}, '1 email queued'], ['en', 'messageQueued', 2, {}, '2 emails queued'],
+        ['fr', 'availableCount', 0, {}, '0 disponible'], ['pt', 'availableCount', 0, {}, '0 disponíveis'], ['pt', 'availableCount', 1, {}, '1 disponível'],
+        ['ru', 'messageQueued', 1, {}, '1 письмо в очереди'], ['ru', 'messageQueued', 3, {}, '3 письма в очереди'],
+        ['ru', 'messageQueued', 5, {}, '5 писем в очереди'], ['ru', 'messageQueued', 21, {}, '21 письмо в очереди'],
+        ['ar', 'availableCount', 0, {}, 'لا أحد متاح'], ['ar', 'availableCount', 1, {}, 'شخص واحد متاح'], ['ar', 'availableCount', 2, {}, 'شخصان متاحان'],
+        ['ar', 'availableCount', 3, {}, '٣ أشخاص متاحون'], ['ar', 'availableCount', 11, {}, '١١ شخصًا متاحًا'], ['ar', 'availableCount', 100, {}, '١٠٠ شخص متاح'],
+        ['ar', 'availableOf', 3, { total: 4 }, '٣ / ٤ متاحون'], ['bn', 'availableCount', 3, {}, '৩ জন আসতে পারবেন'],
+        ['de', 'availableOf', 1000, { total: 1200 }, '1.000 / 1.200 verfügbar'], ['zh', 'availableCount', 1, {}, '1 人有空']
+    ])('%s %s %d', async (locale, key, count, values, expected) => {
+        await lang.set(locale);
+        expect(get(plural)(key, count, values)).toBe(expected);
+    });
+
+    it('has every plural form each language uses for whole numbers', () => {
+        for (const locale of Object.keys(languages)) {
+            const rules = new Intl.PluralRules(locale);
+            const needed = new Set(['other', ...Array.from({ length: 1000 }, (_, n) => rules.select(n))]);
+            for (const key of pluralKeys) for (const form of needed)
+                expect(uiFor(locale)[key], `${locale} ${key} ${form}`).toMatch(new RegExp(`[\\s,]${form} \\{`));
+        }
+    });
+
+    it('formats every message without leftover ICU syntax', async () => {
+        for (const locale of Object.keys(languages)) {
+            await lang.set(locale);
+            for (const key of pluralKeys) for (const count of [0, 1, 2, 3, 5, 11, 21, 102, 1001])
+                expect(get(plural)(key, count, { total: count + 1 }), `${locale} ${key} ${count}`).not.toMatch(/[{}#]|^ui\./);
+        }
+    });
+});
+
+describe('detectLocale', () => {
+    const cases: [string | null, string[], string][] = [
+        [null, ['de-DE', 'en'], 'de'], ['fr', ['de-DE'], 'fr'], ['xx', ['pt-BR'], 'pt'], [null, ['ZH-Hant-TW'], 'zh'],
+        [null, ['en_US'], 'en'], [null, ['nl-NL', 'sv', 'ar-EG'], 'ar'], [null, ['nl-NL', 'sv'], 'it'], [null, [], 'it'],
+        ['toString', ['__proto__', 'constructor'], 'it']
+    ];
+
+    it('prefers the saved language, then the first supported browser language, then Italian', () => {
+        for (const [saved, preferred, expected] of cases) expect(detectLocale(saved, preferred), `${saved} ${preferred}`).toBe(expected);
+    });
+
+    it('matches the inline script that sets lang and dir before the first paint', () => {
+        const html = readFileSync(new URL('../app.html', import.meta.url), 'utf8');
+        const script = html.match(/<script>(\/\* Language and direction[\s\S]*?)<\/script>/)![1];
+        for (const [saved, preferred, expected] of cases) {
+            const root = { lang: '', dir: '' };
+            new Function('document', 'localStorage', 'navigator', script)({ documentElement: root }, { getItem: () => saved }, { languages: preferred });
+            expect(root, `${saved} ${preferred}`).toEqual({ lang: expected, dir: expected === 'ar' ? 'rtl' : 'ltr' });
+        }
+        const root = { lang: '', dir: '' };
+        new Function('document', 'localStorage', 'navigator', script)({ documentElement: root }, { getItem: () => { throw new Error('blocked'); } }, { languages: ['ar'] });
+        expect(root).toEqual({ lang: 'ar', dir: 'rtl' });
     });
 });
 
