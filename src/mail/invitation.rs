@@ -1,3 +1,4 @@
+use crate::observability::db_class;
 use crate::{db, ApiError};
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Postgres, Row, Transaction};
@@ -95,32 +96,82 @@ pub(super) async fn enqueue(
     .map_err(db)
 }
 
-pub(super) async fn attachment(pool: &PgPool, id: Uuid) -> Result<Option<Vec<u8>>, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    // Serialize rendering across recipients and retain the result for retries.
-    let row =
-        sqlx::query("SELECT payload,pdf FROM confirmation_invitations WHERE id=$1 FOR UPDATE")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let mut pdf = None;
-    if let Some(row) = row {
-        if let Some(Json(payload)) = row.get::<Option<Json<Value>>, _>("payload") {
-            match render(&payload).await {
-                Ok(attachment) => pdf = Some(attachment),
-                Err(reason) => tracing::warn!(event = "invitation_pdf_fallback", reason),
-            }
-            sqlx::query("UPDATE confirmation_invitations SET payload=NULL,pdf=$2 WHERE id=$1")
-                .bind(id)
-                .bind(&pdf)
-                .execute(&mut *tx)
-                .await?;
-        } else {
-            pdf = row.get("pdf");
+#[derive(Debug)]
+pub(super) enum AttachmentError {
+    Database(sqlx::Error),
+    RenderInProgress,
+}
+
+impl From<sqlx::Error> for AttachmentError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Database(error)
+    }
+}
+
+impl AttachmentError {
+    pub(super) fn reason(&self) -> &'static str {
+        match self {
+            Self::Database(error) => db_class(error),
+            Self::RenderInProgress => "render_in_progress",
         }
     }
-    tx.commit().await?;
-    Ok(pdf)
+}
+
+/// How long a dispatcher waits for a render another one claimed (Typst times out after 6s).
+const RENDER_WAIT: Duration = Duration::from_secs(8);
+const RENDER_POLL: Duration = Duration::from_millis(250);
+
+pub(super) async fn attachment(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<Vec<u8>>, AttachmentError> {
+    let deadline = tokio::time::Instant::now() + RENDER_WAIT;
+    loop {
+        // Claim the render with a lease instead of a row lock, so no transaction or pooled
+        // connection is held while Typst runs; the result is retained for the other recipients.
+        let claimed: Option<Json<Value>> = sqlx::query_scalar(
+            "UPDATE confirmation_invitations SET render_locked_until=now()+interval '30 seconds'
+             WHERE id=$1 AND payload IS NOT NULL
+               AND (render_locked_until IS NULL OR render_locked_until<now())
+             RETURNING payload",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        if let Some(Json(payload)) = claimed {
+            let pdf = match render(&payload).await {
+                Ok(attachment) => Some(attachment),
+                Err(reason) => {
+                    tracing::warn!(event = "invitation_pdf_fallback", reason);
+                    None
+                }
+            };
+            // A renderer whose lease expired must not overwrite a result stored meanwhile.
+            sqlx::query(
+                "UPDATE confirmation_invitations SET payload=NULL,pdf=$2,render_locked_until=NULL
+                 WHERE id=$1 AND payload IS NOT NULL",
+            )
+            .bind(id)
+            .bind(&pdf)
+            .execute(pool)
+            .await?;
+            return Ok(pdf);
+        }
+        let row = sqlx::query(
+            "SELECT payload IS NOT NULL AS pending,pdf FROM confirmation_invitations WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        match row {
+            None => return Ok(None),
+            Some(row) if !row.get::<bool, _>("pending") => return Ok(row.get("pdf")),
+            Some(_) if tokio::time::Instant::now() >= deadline => {
+                return Err(AttachmentError::RenderInProgress)
+            }
+            Some(_) => tokio::time::sleep(RENDER_POLL).await,
+        }
+    }
 }
 
 async fn render(payload: &Value) -> Result<Vec<u8>, &'static str> {

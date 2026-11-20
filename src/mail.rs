@@ -661,7 +661,7 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
                 .await
             }
             Err(error) => {
-                tracing::error!(event = "invitation_load_failed", mail_id = %id, reason = db_class(&error));
+                tracing::error!(event = "invitation_load_failed", mail_id = %id, reason = error.reason());
                 Err("invitation_load_failed".into())
             }
         };
