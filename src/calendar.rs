@@ -6,7 +6,9 @@ use axum::{
 use chrono::{DateTime, Days, NaiveDateTime, Offset, TimeZone, Utc};
 use sqlx::{PgPool, Row};
 
-use crate::{bad, db, mail, missing, valid_token, ApiError};
+use crate::error::{bad, db, missing, ApiError};
+use crate::mail;
+use crate::validate::valid_token;
 
 pub async fn download(
     State(pool): State<PgPool>,

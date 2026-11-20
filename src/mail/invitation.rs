@@ -1,5 +1,5 @@
+use crate::error::{db, ApiError};
 use crate::observability::db_class;
-use crate::{db, ApiError};
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Postgres, Row, Transaction};
 use std::{
