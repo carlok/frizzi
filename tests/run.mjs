@@ -48,7 +48,7 @@ async function messageFor(address,subject=''){
  return (await fetch(`${mail}/api/v1/message/${entry.ID}`)).json();
 }
 async function queueDrained(){
- await until(async()=>(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL')).rows[0].count==='0','Email queue did not drain');
+ await until(async()=>(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL')).rows[0].count==='0','Email queue did not drain');
 }
 function tokenFrom(text){return text.match(/http:\/\/127\.0\.0\.1:15173\/[\w-]{21}(?:\/admin)?\/([\w-]{21})/)[1];}
 const initial={title:'Cena <b>insieme</b>',description:'Una sera insieme',location:'Roma',organizer_name:'Ada',organizer_email:'ada@example.test',locale:'it',allow_multiple_choices:true,timezone:'Europe/Rome',slots:[{date:'2030-02-03',start:'20:00',end:'22:00'},{date:'2030-02-04',start:'20:00',end:null}]};
@@ -217,7 +217,7 @@ try{
  await call(statusPath,'PUT',{status:'OPEN',confirmed_slot_id:null,locale:'it'});
  check((await messageFor(v.email,'Encuesta reabierta')).Subject.includes('🗳️'),'Reopening notification');
  await queueDrained();
- const pending=(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL')).rows[0].count;
+ const pending=(await client.query('SELECT count(*) FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL')).rows[0].count;
  check(pending==='0','Email queue drained');
  check((await client.query("SELECT count(*) FROM email_outbox WHERE sent_at IS NOT NULL AND (body<>'' OR html IS NOT NULL OR recipient<>'')")).rows[0].count==='0','Delivered secrets removed from both formats in the outbox');
  const unauthorized=await fetch(api+'/api/cron/email');check(unauthorized.status===401,'Cron requires secret');
@@ -251,10 +251,13 @@ try{
  start(mailpitPath,[],{env:{...env,MP_SMTP_BIND_ADDR:'127.0.0.1:11025',MP_UI_BIND_ADDR:'127.0.0.1:18025'}});
  await waitFor(mail+'/api/v1/messages');
  await client.query("INSERT INTO email_outbox (recipient,subject,body) VALUES ('legacy@example.test','Pending before upgrade','Plain text')");
+ await client.query("INSERT INTO email_outbox (recipient,subject,body,html) VALUES ('no-at-sign.example.test','Rejected','Private text','Private HTML')");
  await client.query('UPDATE email_outbox SET available_at=now() WHERE sent_at IS NULL');
  const retried=await fetch(api+'/api/cron/email',{headers:{Authorization:`Bearer ${cronSecret}`}});check(retried.ok,'Retry worker');
  check((await messageFor('retry@example.test')).Text.includes('/admin/'),'Private link delivered after retry');
  check((await messageFor('legacy@example.test')).Text.trim()==='Plain text','Queued plain text from before the upgrade still delivers');
+ await until(async()=>(await client.query("SELECT count(*) FROM email_outbox WHERE subject='' AND failed_at IS NOT NULL AND sent_at IS NULL AND attempts=1 AND recipient='' AND body='' AND html IS NULL")).rows[0].count==='1','A rejected message fails at once and is scrubbed');
+ check(true,'Permanent delivery failures are terminal and drop private content');
  const updateMail=await messageFor(v.email,'💌 ¡Una novedad para ti!');
  check(updateMail.HTML.includes('<b>Ci vediamo!</b>')&&updateMail.HTML.includes('<i>A presto</i>'),'Participant message preserves allowed formatting');
  check(updateMail.HTML.includes('&lt;img')&&!updateMail.HTML.includes('<img'),'Participant message escapes unsupported HTML');

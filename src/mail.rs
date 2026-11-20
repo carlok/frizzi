@@ -517,10 +517,16 @@ fn change_notes(
     }
     notes
 }
+
+/// After this many claims a message is marked failed instead of being retried again.
+const MAX_ATTEMPTS: i32 = 12;
+
 #[derive(Debug)]
 struct DeliveryError {
     reason: &'static str,
     status: Option<u16>,
+    /// The provider rejected this exact message: retrying cannot succeed.
+    permanent: bool,
 }
 
 impl From<&'static str> for DeliveryError {
@@ -528,8 +534,34 @@ impl From<&'static str> for DeliveryError {
         Self {
             reason,
             status: None,
+            permanent: false,
         }
     }
+}
+
+impl DeliveryError {
+    fn rejected(reason: &'static str) -> Self {
+        Self {
+            permanent: true,
+            ..reason.into()
+        }
+    }
+}
+
+/// SMTP 5xx replies are final for the message, except authentication failures (x3x), which
+/// point at a fixable configuration problem rather than at this message.
+fn smtp_rejects_message(code: u16) -> bool {
+    (500..600).contains(&code) && (code / 10) % 10 != 3
+}
+
+/// Resend 4xx responses reject the request itself, except credential/domain problems (401/403),
+/// request timeouts (408), idempotency races (409) and rate limiting (429), which can recover.
+fn resend_rejects_message(status: u16) -> bool {
+    (400..500).contains(&status) && !matches!(status, 401 | 403 | 408 | 409 | 429)
+}
+
+fn gives_up(error: &DeliveryError, attempts: i32) -> bool {
+    error.permanent || attempts >= MAX_ATTEMPTS
 }
 
 async fn deliver(
@@ -551,7 +583,9 @@ async fn deliver(
             .unwrap_or(1025);
         let message = Message::builder()
             .from(from.parse().map_err(|_| "invalid_mail_from")?)
-            .to(to.parse().map_err(|_| "invalid_recipient")?)
+            .to(to
+                .parse()
+                .map_err(|_| DeliveryError::rejected("invalid_recipient"))?)
             .subject(subject);
         let message = if let Some(pdf) = pdf {
             let mixed = MultiPart::mixed();
@@ -578,7 +612,7 @@ async fn deliver(
                 .header(ContentType::TEXT_PLAIN)
                 .body(body.to_owned())
         }
-        .map_err(|_| "invalid_smtp_message")?;
+        .map_err(|_| DeliveryError::rejected("invalid_smtp_message"))?;
         AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
             .port(port)
             .timeout(Some(Duration::from_secs(3)))
@@ -586,7 +620,8 @@ async fn deliver(
             .send(message)
             .await
             .map_err(|error| {
-                if error.is_timeout() {
+                let status = error.status().map(u16::from);
+                let reason = if error.is_timeout() {
                     "smtp_timeout"
                 } else if error.is_transient() {
                     "smtp_transient"
@@ -594,6 +629,11 @@ async fn deliver(
                     "smtp_rejected"
                 } else {
                     "smtp_transport"
+                };
+                DeliveryError {
+                    reason,
+                    status,
+                    permanent: error.is_permanent() && status.is_some_and(smtp_rejects_message),
                 }
             })?;
     } else {
@@ -620,16 +660,20 @@ async fn deliver(
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| DeliveryError {
-                reason: upstream_class(&error),
-                status: error.status().map(|status| status.as_u16()),
+            .map_err(|error| {
+                let status = error.status().map(|status| status.as_u16());
+                DeliveryError {
+                    reason: upstream_class(&error),
+                    status,
+                    permanent: status.is_some_and(resend_rejects_message),
+                }
             })?;
     }
     Ok(())
 }
 pub async fn dispatch(pool: &PgPool, limit: usize) {
     for _ in 0..limit {
-        let message = sqlx::query("UPDATE email_outbox SET locked_until=now()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM email_outbox WHERE sent_at IS NULL AND available_at<=now() AND (locked_until IS NULL OR locked_until<now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,recipient,subject,body,html,invitation_id,attempts")
+        let message = sqlx::query("UPDATE email_outbox SET locked_until=now()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL AND available_at<=now() AND (locked_until IS NULL OR locked_until<now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,recipient,subject,body,html,invitation_id,attempts")
             .fetch_optional(pool).await;
         let row = match message {
             Ok(Some(row)) => row,
@@ -666,10 +710,23 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
             }
         };
         let duration_ms = start.elapsed().as_millis() as u64;
-        if let Err(error) = result {
+        if let Some(error) = result
+            .as_ref()
+            .err()
+            .filter(|error| gives_up(error, attempts))
+        {
+            tracing::error!(event = "mail_failed", mail_id = %id, attempts, duration_ms,
+                reason = error.reason, upstream_status = error.status, permanent = error.permanent);
+            // Undeliverable: drop bearer links and addresses just like after delivery.
+            if let Err(error) = sqlx::query("UPDATE email_outbox SET failed_at=now(),locked_until=NULL,body='',html=NULL,recipient='',subject='',invitation_id=NULL WHERE id=$1").bind(id).execute(pool).await {
+                tracing::error!(event = "mail_failure_write_failed", mail_id = %id, reason = db_class(&error));
+            }
+            release_invitation(pool, invitation).await;
+        } else if let Err(error) = result {
             tracing::warn!(event = "mail_deferred", mail_id = %id, attempts, duration_ms,
                 reason = error.reason, upstream_status = error.status);
-            if let Err(error) = sqlx::query("UPDATE email_outbox SET locked_until=NULL,available_at=now()+make_interval(secs=>LEAST(3600,30*attempts)) WHERE id=$1").bind(id).execute(pool).await {
+            // Exponential backoff (30 s doubling, capped at 1 h) spreads MAX_ATTEMPTS over ~5 h.
+            if let Err(error) = sqlx::query("UPDATE email_outbox SET locked_until=NULL,available_at=now()+make_interval(secs=>LEAST(3600,30*power(2,LEAST(attempts,8)-1))) WHERE id=$1").bind(id).execute(pool).await {
                 tracing::error!(event = "mail_retry_schedule_failed", mail_id = %id, reason = db_class(&error));
             }
         } else {
@@ -679,14 +736,17 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
                 Err(error) => tracing::error!(event = "mail_receipt_write_failed", mail_id = %id, reason = db_class(&error)),
                 Ok(_) => tracing::info!(event = "mail_accepted", mail_id = %id, attempts, duration_ms),
             }
-            if let Some(invitation) = invitation {
-                // Drop the rendered PDF as soon as its last recipient has it; cleanup() catches races.
-                if let Err(error) = sqlx::query("DELETE FROM confirmation_invitations WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=$1)")
-                    .bind(invitation).execute(pool).await {
-                    tracing::error!(event = "maintenance_cleanup_failed", operation = "invitation", reason = db_class(&error));
-                }
-            }
+            release_invitation(pool, invitation).await;
         }
+    }
+}
+
+/// Drop the rendered PDF as soon as no pending mail needs it; cleanup() catches races.
+async fn release_invitation(pool: &PgPool, invitation: Option<Uuid>) {
+    let Some(invitation) = invitation else { return };
+    if let Err(error) = sqlx::query("DELETE FROM confirmation_invitations WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=$1)")
+        .bind(invitation).execute(pool).await {
+        tracing::error!(event = "maintenance_cleanup_failed", operation = "invitation", reason = db_class(&error));
     }
 }
 
@@ -694,7 +754,7 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
 pub async fn cleanup(pool: &PgPool) {
     for (operation, query) in [
         ("invitation", "DELETE FROM confirmation_invitations WHERE NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=confirmation_invitations.id)"),
-        ("sent_mail", "DELETE FROM email_outbox WHERE sent_at<now()-interval '7 days'"),
+        ("sent_mail", "DELETE FROM email_outbox WHERE sent_at<now()-interval '7 days' OR failed_at<now()-interval '7 days'"),
         ("rate_limit", "DELETE FROM request_limits WHERE hour<now()-interval '2 hours'"),
     ] {
         if let Err(error) = sqlx::query(query).execute(pool).await {
@@ -706,7 +766,7 @@ pub async fn cleanup(pool: &PgPool) {
 pub async fn inspect_queue(pool: &PgPool) {
     let counts = sqlx::query_as::<_, (i64, i64)>(
         "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(created_at))::bigint, 0)
-         FROM email_outbox WHERE sent_at IS NULL",
+         FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL",
     )
     .fetch_one(pool)
     .await;
@@ -808,6 +868,21 @@ mod tests {
             assert_eq!(query["api"], "1");
             assert_eq!(query.len(), 2);
         }
+    }
+
+    #[test]
+    fn only_message_specific_rejections_stop_retries() {
+        assert!(smtp_rejects_message(550) && smtp_rejects_message(552));
+        assert!(!smtp_rejects_message(535) && !smtp_rejects_message(530));
+        assert!(!smtp_rejects_message(421) && !smtp_rejects_message(451));
+        assert!(resend_rejects_message(400) && resend_rejects_message(422));
+        for status in [401, 403, 408, 409, 429, 500, 503] {
+            assert!(!resend_rejects_message(status), "{status}");
+        }
+        let transient = DeliveryError::from("smtp_timeout");
+        assert!(!gives_up(&transient, 1) && !gives_up(&transient, MAX_ATTEMPTS - 1));
+        assert!(gives_up(&transient, MAX_ATTEMPTS));
+        assert!(gives_up(&DeliveryError::rejected("invalid_recipient"), 1));
     }
 
     #[test]
