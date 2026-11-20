@@ -8,7 +8,8 @@
  import * as poll from '#lib/poll.ts';
  import { parsePath } from '#lib/route.ts';
  import { datesChanged, slotDraft, slotPayload, slotProblems } from '#lib/slots.ts';
- import { convertTime, viewerZone, zoneName } from '#lib/timezones.ts';
+ import { canonicalZone, convertTime, viewerZone, zoneName } from '#lib/timezones.ts';
+ import { numberFormat } from '#lib/intl.ts';
  import { onDestroy, tick } from 'svelte';
  import LocationAttribution from '#lib/components/LocationAttribution.svelte';
  import EventCalendar from '#lib/components/EventCalendar.svelte';
@@ -61,7 +62,7 @@
    const route=parsePath(page.params.path);
    if(!route){mode='event';errorCode='not_found';return;}
    ({mode,publicToken,secret}=route);
-   if(mode==='create'){timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Rome';return;}
+   if(mode==='create'){timezone=viewerZone();return;}
    await load(current);
  }
  async function request(url:string,method='GET',body?:unknown){
@@ -87,9 +88,11 @@
    loading=!event; refreshing=!!event;
    try{
      const path=mode==='admin'?`/admin/${secret}`:'';
-     const data:EventData=await request(`/api/events/${publicToken}${path}`);
-     let person;
-     if(mode==='edit') person=await request(`/api/events/${publicToken}/participant/${secret}`);
+     // A private participant link needs both the event and the saved answer: fetch them together.
+     const [data,person]:[EventData,{name:string,email:string,slots:string[]}|undefined]=await Promise.all([
+       request(`/api/events/${publicToken}${path}`),
+       mode==='edit'?request(`/api/events/${publicToken}/participant/${secret}`):undefined
+     ]);
      if(current!==generation)return;
      event=data;
      if(person){name=person.name;email=person.email;selected=person.slots;}
@@ -117,8 +120,7 @@
      (document.querySelector(found.get(slots[index].key)==='duplicateDate'?`#date-${index}`:`[name="end-${index}-hour"]`) as HTMLElement|null)?.focus();
      throw new Error('invalid_input');
    }
-   try { new Intl.DateTimeFormat('it',{timeZone:timezone}); }
-   catch {
+   if(!canonicalZone(timezone)){
      if(creating)track('create_timezone');
      throw new Error('invalid_input');
    }
@@ -273,7 +275,7 @@
  $: tiedLeaders=poll.tiedLeaders(event,voteCounts);
  $: decisiveSlot=poll.decisiveSlot(event,tiedLeaders);
  $: leadingSlots=poll.leadingSlots(event,tiedLeaders,decisiveSlot);
- $: numbers=new Intl.NumberFormat(intlLocale($lang));
+ $: numbers=numberFormat(intlLocale($lang));
  $: pollState=poll.pollState(event);
  $: problems=slotsChecked?slotProblems(slots):new Map();
  $: voteFormShown=mode!=='admin'&&event?.status==='OPEN'&&!event.voting_ended;
@@ -398,7 +400,7 @@
   <div class="party-scene mt-5">
    {#if event.status !== 'CANCELLED'}
     <div class="availability-party">
-     <img src={availabilityParty} alt="" width="840" height="280" decoding="async"/>
+     <img src={availabilityParty} alt="" width="552" height="184" loading="lazy" decoding="async"/>
     </div>
    {/if}
    <div class="event-columns party-card">

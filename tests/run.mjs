@@ -564,6 +564,10 @@ try{
   const fonts=await document.fonts.load('600 14px Inter');
   return fonts.some(font=>font.family==='Inter')&&getComputedStyle(document.querySelector('h1')).fontFamily.startsWith('Inter');
  }),'The site loads the local Inter font');
+ check(await page.evaluate(()=>{
+  const preload=document.querySelector('link[rel="preload"][as="font"]');
+  return !!preload&&[...document.fonts].some(font=>font.family==='Inter'&&font.status==='loaded'&&font.unicodeRange.includes('U+400-52F'))&&new URL(preload.href).pathname.endsWith('.woff2');
+ }),'The Latin and Cyrillic Inter subset is preloaded and declares its unicode-range');
  const offGrid=await call('/api/events','POST',{...initial,organizer_email:'offgrid@example.test',slots:[{date:'2030-02-03',start:'19:07',end:null}]});
  await page.goto(`${web}/${offGrid.public_token}/admin/${tokenFrom((await messageFor('offgrid@example.test')).Text)}`);
  await page.locator('.responses>p').filter({hasText:'Ancora nessuna risposta. Condividi il link per raccogliere le disponibilità.'}).waitFor();

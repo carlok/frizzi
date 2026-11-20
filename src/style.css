@@ -1,15 +1,24 @@
 @import "tailwindcss";
 
+/* Inter 4 variable (wght and opsz axes), subset to Latin, Latin Extended and Cyrillic with
+   pyftsubset: default OpenType features plus numeric ones (tnum, frac, case...). */
 @font-face {
   font-family: Inter;
-  src: url('./lib/assets/InterVariable.woff2') format('woff2');
+  src: url('./lib/assets/InterVariable-LatinCyrillic.woff2') format('woff2');
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
+  unicode-range: U+0000-024F, U+0259, U+02B0-036F, U+0400-052F, U+1C80-1C8F, U+1E00-1EFF, U+2000-22FF, U+2C60-2C7F, U+2DE0-2DFF, U+A640-A69F, U+A720-A7FF, U+FEFF, U+FFFD;
 }
 
 :root {
   --font-ui: Inter, system-ui, sans-serif;
+  /* Inter has no Arabic, Devanagari, Bengali or Han glyphs. Those scripts keep the system UI font,
+     then name the usual system fonts for platforms whose UI font lacks the script. */
+  --font-ar: system-ui, "Noto Sans Arabic", "Geeza Pro", "Segoe UI", Tahoma, sans-serif;
+  --font-hi: system-ui, "Noto Sans Devanagari", "Kohinoor Devanagari", "Nirmala UI", Mangal, sans-serif;
+  --font-bn: system-ui, "Noto Sans Bengali", "Kohinoor Bangla", "Nirmala UI", Vrinda, sans-serif;
+  --font-zh: system-ui, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
   /* Contrast tokens (WCAG 2.2 AA): muted text >= 4.5:1, control borders and focus >= 3:1 on the light backgrounds. */
   --muted: #636f64;
   --control-border: #7b8d7d;
@@ -19,6 +28,11 @@
   --heat-low: #e8f2dc;
   --heat-high: #a5d46d;
 }
+/* Latin text in these languages (names, places, digits) keeps Inter. */
+:root:lang(ar) { --font-ui: Inter, var(--font-ar); }
+:root:lang(hi) { --font-ui: Inter, var(--font-hi); }
+:root:lang(bn) { --font-ui: Inter, var(--font-bn); }
+:root:lang(zh) { --font-ui: Inter, var(--font-zh); }
 @theme inline { --font-sans: var(--font-ui); }
 
 /* Element defaults sit in the base layer so Tailwind utilities can override them. */

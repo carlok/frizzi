@@ -3,6 +3,7 @@
  import { Button } from '#lib/components/ui/button/index.ts';
  import { errorText, intlLocale, lang, plural, t } from '#lib/i18n.ts';
  import { messagePreview } from '#lib/message.ts';
+ import { numberFormat } from '#lib/intl.ts';
  import type { Question } from '#lib/types.ts';
 
  export let recipients: number;
@@ -16,7 +17,7 @@
  let queued: number | null = null;
  let error = '';
  let attempt: {message: string; id: string} | undefined;
- $: numbers = new Intl.NumberFormat(intlLocale($lang));
+ $: numbers = numberFormat(intlLocale($lang));
  // Same rules as the email: only the allowed tags render, everything else shows as typed.
  $: preview = messagePreview(message.trim());
 

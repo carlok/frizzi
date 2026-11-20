@@ -1,5 +1,6 @@
 import { addMessages, init, locale, format, register } from 'svelte-i18n';
 import { derived } from 'svelte/store';
+import { dateTimeFormat, numberFormat } from './intl.ts';
 import it from '../../locales/it.json';
 export const languages: Record<string,string> = { it:'Italiano', en:'English', es:'Español', zh:'中文', hi:'हिन्दी', ar:'العربية', fr:'Français', bn:'বাংলা', pt:'Português', ru:'Русский', de:'Deutsch' };
 // Italian is bundled for server rendering and as the fallback; other languages load when chosen.
@@ -25,7 +26,7 @@ export const t = derived(format, $format => Object.fromEntries(plain.map(key=>[k
  * values already formatted, so their digits match the rest of the page (ICU `#` would not).
  */
 export const plural = derived([format, locale], ([$format, $locale]) => {
-    const numbers = new Intl.NumberFormat(intlLocale($locale));
+    const numbers = numberFormat(intlLocale($locale));
     return (key: PluralKey, count: number, values: Record<string, number> = {}) => $format(`ui.${key}`, { values: {
         ...Object.fromEntries(Object.entries(values).map(([name, value]) => [name, numbers.format(value)])),
         count, n: numbers.format(count)
@@ -46,17 +47,17 @@ export function intlLocale(language: string | null | undefined) {
     return Object.hasOwn(dateLocales, language ?? '') ? dateLocales[language!] : dateLocales.it;
 }
 export function dateFormatter(language: string | null | undefined) {
-    return new Intl.DateTimeFormat(intlLocale(language), {
+    return dateTimeFormat(intlLocale(language), {
         day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC', calendar: 'gregory'
     });
 }
 /** An event date for reading, with the month spelled out ("sab 3 feb 2030"); typed dates keep the numeric dateFormatter. */
 export function formatDate(date: string, language: string | null | undefined) {
-    return new Intl.DateTimeFormat(intlLocale(language), {
+    return dateTimeFormat(intlLocale(language), {
         // Portuguese abbreviated months fall back to a numeric pattern in CLDR, so it spells them out.
         weekday: 'short', day: 'numeric', month: intlLocale(language) === 'pt-PT' ? 'long' : 'short', year: 'numeric', timeZone: 'UTC', calendar: 'gregory'
     }).format(new Date(`${date}T12:00:00Z`));
 }
 export function formatTime(time: string, locale: string | null | undefined) {
-    return new Intl.DateTimeFormat(intlLocale(locale),{hour:'numeric',minute:'2-digit',timeZone:'UTC'}).format(new Date(`2000-01-01T${time}Z`));
+    return dateTimeFormat(intlLocale(locale),{hour:'numeric',minute:'2-digit',timeZone:'UTC'}).format(new Date(`2000-01-01T${time}Z`));
 }

@@ -2,6 +2,7 @@
  import { ChevronLeft, ChevronRight } from '@lucide/svelte';
  import { formatDate, formatTime, intlLocale, lang, plural, t } from '#lib/i18n.ts';
  import { firstWeekday } from '#lib/dates.ts';
+ import { dateTimeFormat, numberFormat } from '#lib/intl.ts';
  import type { Slot } from '#lib/types.ts';
 
  export let slots: Slot[];
@@ -40,12 +41,12 @@
  $: slotsByDay = new Map(slots.map(slot => [slot.date, slot]));
  $: weekdays = Array.from({length: 7}, (_, index) => {
    const weekday = new Date(Date.UTC(2024, 0, 7 + (firstWeekday(locale) + index) % 7));
-   return new Intl.DateTimeFormat(locale, {weekday:'short', timeZone:'UTC'}).format(weekday);
+   return dateTimeFormat(locale, {weekday:'short', timeZone:'UTC'}).format(weekday);
  });
- $: monthTitle = shownMonth ? new Intl.DateTimeFormat(locale, {
+ $: monthTitle = shownMonth ? dateTimeFormat(locale, {
    month:'long', year:'numeric', timeZone:'UTC', calendar:'gregory'
  }).format(new Date(`${shownMonth}-01T12:00:00Z`)) : '';
- $: numbers = new Intl.NumberFormat(locale);
+ $: numbers = numberFormat(locale);
 </script>
 
 {#if shownMonth}

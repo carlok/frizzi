@@ -1,9 +1,11 @@
+import { dateTimeFormat } from './intl.ts';
+
 /** The IANA id with the casing the API expects (`europe/rome` → `Europe/Rome`), or `''` when the runtime does not know the zone. */
 export function canonicalZone(zone: string) {
     const trimmed = zone.trim();
     if (!trimmed) return '';
     try {
-        const resolved = new Intl.DateTimeFormat('en', { timeZone: trimmed }).resolvedOptions().timeZone;
+        const resolved = dateTimeFormat('en', { timeZone: trimmed }).resolvedOptions().timeZone;
         return resolved.toLowerCase() === trimmed.toLowerCase() ? resolved : trimmed;
     } catch { return ''; }
 }
@@ -15,7 +17,7 @@ export function viewerZone() {
 
 function zonePart(zone: string, locale: string, timeZoneName: 'longGeneric' | 'shortOffset', at: Date) {
     try {
-        return new Intl.DateTimeFormat(locale, { timeZone: zone, timeZoneName }).formatToParts(at).find(part => part.type === 'timeZoneName')?.value || '';
+        return dateTimeFormat(locale, { timeZone: zone, timeZoneName }).formatToParts(at).find(part => part.type === 'timeZoneName')?.value || '';
     } catch { return ''; }
 }
 
@@ -45,7 +47,7 @@ export function zoneOptions(locale: string, current = '', at = new Date()) {
 
 /** Milliseconds the zone is ahead of UTC at the instant. */
 function offsetAt(instant: number, zone: string) {
-    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    const parts = Object.fromEntries(dateTimeFormat('en-US', {
         timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
     }).formatToParts(instant).map(part => [part.type, part.value]));
     return Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second) - Math.floor(instant / 1000) * 1000;

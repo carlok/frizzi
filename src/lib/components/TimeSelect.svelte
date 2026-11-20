@@ -1,6 +1,7 @@
 <script lang="ts">
  import { intlLocale, lang, t } from '#lib/i18n.ts';
  import { minuteOptions } from '#lib/dates.ts';
+ import { numberFormat } from '#lib/intl.ts';
 
  export let value = '';
  export let name: string;
@@ -13,7 +14,7 @@
  $: hour = value.slice(0, 2);
  $: minute = value.slice(3, 5) || '00';
  $: minutes = minuteOptions(minute);
- $: numbers = new Intl.NumberFormat(intlLocale($lang), { minimumIntegerDigits: 2 });
+ $: numbers = numberFormat(intlLocale($lang), { minimumIntegerDigits: 2 });
 
  function setHour(hour: string) {
    value = hour ? `${hour}:${minute}` : '';
