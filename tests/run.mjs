@@ -89,6 +89,10 @@ try{
  const earlyDeadline=await call('/api/events','POST',{...initial,voting_deadline:'2000-01-01'},400);
  check(earlyDeadline.error==='invalid_deadline','A new deadline cannot be in the past');
  await call('/api/events','POST',{...initial,slots:[{...initial.slots[0],end:'19:00'}]},400);
+ for(const date of ['2000-01-01','2099-01-01'])check((await call('/api/events','POST',{...initial,slots:[{...initial.slots[0],date}]},400)).error==='invalid_dates',`Proposed date ${date} is out of range`);
+ check((await call('/api/events','POST',{...initial,voting_deadline:'2030-02-05'},400)).error==='invalid_deadline','Voting cannot close after the last proposed date');
+ const blank=await call('/api/events','POST',{...initial,description:' \n\t ',organizer_email:'blank@example.test'});
+ check((await call(`/api/events/${blank.public_token}`)).description===null,'A blank description is stored as none');
  for(const locale of locales.filter(code=>code!=='it')){
   const address=`locale-${locale}@example.test`;
   const result=await call('/api/events','POST',{...initial,organizer_email:address,locale});
