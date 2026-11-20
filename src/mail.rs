@@ -643,7 +643,8 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
         let attempts: i32 = row.get("attempts");
         let start = std::time::Instant::now();
         let html: Option<String> = row.get("html");
-        let pdf = match row.get::<Option<Uuid>, _>("invitation_id") {
+        let invitation: Option<Uuid> = row.get("invitation_id");
+        let pdf = match invitation {
             Some(invitation) => invitation::attachment(pool, invitation).await,
             None => Ok(None),
         };
@@ -678,8 +679,19 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
                 Err(error) => tracing::error!(event = "mail_receipt_write_failed", mail_id = %id, reason = db_class(&error)),
                 Ok(_) => tracing::info!(event = "mail_accepted", mail_id = %id, attempts, duration_ms),
             }
+            if let Some(invitation) = invitation {
+                // Drop the rendered PDF as soon as its last recipient has it; cleanup() catches races.
+                if let Err(error) = sqlx::query("DELETE FROM confirmation_invitations WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=$1)")
+                    .bind(invitation).execute(pool).await {
+                    tracing::error!(event = "maintenance_cleanup_failed", operation = "invitation", reason = db_class(&error));
+                }
+            }
         }
     }
+}
+
+/// Periodic housekeeping, run by the maintenance worker and the cron rather than after every write.
+pub async fn cleanup(pool: &PgPool) {
     for (operation, query) in [
         ("invitation", "DELETE FROM confirmation_invitations WHERE NOT EXISTS (SELECT 1 FROM email_outbox WHERE invitation_id=confirmation_invitations.id)"),
         ("sent_mail", "DELETE FROM email_outbox WHERE sent_at<now()-interval '7 days'"),

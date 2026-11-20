@@ -189,6 +189,7 @@ pub async fn maintain(pool: &PgPool) -> Result<(), sqlx::Error> {
         tracing::info!(event = "event_retention_purge", events, legacy_mail);
     }
     mail::dispatch(pool, 25).await;
+    mail::cleanup(pool).await;
     Ok(())
 }
 pub async fn maintain_observability(pool: &PgPool) {
