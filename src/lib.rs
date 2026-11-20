@@ -287,20 +287,52 @@ fn per_ip(limit: i32) -> i32 {
     limit.saturating_mul(*IP_LIMIT_SCALE)
 }
 
-/// The client address used for rate limiting. Proxy headers are trusted only on Vercel, which
-/// overwrites them, or when `FRIZZI_TRUST_PROXY=1`; otherwise the socket peer is used.
+/// `FRIZZI_TRUST_PROXY=1` always trusts forwarded headers, `0` never does, and when unset they are
+/// trusted from a loopback peer, such as a reverse proxy on the same host.
+static TRUST_PROXY: LazyLock<Option<bool>> = LazyLock::new(|| {
+    match std::env::var("FRIZZI_TRUST_PROXY")
+        .as_deref()
+        .map(str::trim)
+    {
+        Ok("1") => Some(true),
+        Ok("0") => Some(false),
+        _ => None,
+    }
+});
+
+/// Where the request came from, which decides how far forwarded headers can be trusted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Origin {
+    /// Vercel overwrites `X-Real-IP` and `X-Forwarded-For` with the client address.
+    Vercel,
+    /// A proxy we trust appends the address it saw to `X-Forwarded-For`.
+    TrustedProxy,
+    Direct,
+}
+fn origin(on_vercel: bool, trust_proxy: Option<bool>, peer: Option<IpAddr>) -> Origin {
+    let loopback = peer.is_some_and(|ip| ip.to_canonical().is_loopback());
+    if on_vercel {
+        Origin::Vercel
+    } else if trust_proxy.unwrap_or(loopback) {
+        Origin::TrustedProxy
+    } else {
+        Origin::Direct
+    }
+}
+
+/// The client address used for rate limiting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ClientIp(Option<IpAddr>);
 impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
     type Rejection = Infallible;
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
-        let trust_headers = parts.extensions.get::<vercel_runtime::AppState>().is_some()
-            || std::env::var("FRIZZI_TRUST_PROXY").is_ok_and(|v| v == "1");
         let peer = parts
             .extensions
             .get::<ConnectInfo<SocketAddr>>()
             .map(|info| info.0.ip());
-        Ok(ClientIp(client_ip(&parts.headers, trust_headers, peer)))
+        let on_vercel = parts.extensions.get::<vercel_runtime::AppState>().is_some();
+        let origin = origin(on_vercel, *TRUST_PROXY, peer);
+        Ok(ClientIp(client_ip(&parts.headers, origin, peer)))
     }
 }
 impl ClientIp {
@@ -308,18 +340,35 @@ impl ClientIp {
         format!("{scope}-ip:{}", ip_bucket(self.0))
     }
 }
-fn client_ip(headers: &HeaderMap, trust_headers: bool, peer: Option<IpAddr>) -> Option<IpAddr> {
-    let header = |name: &str| {
+fn client_ip(headers: &HeaderMap, origin: Origin, peer: Option<IpAddr>) -> Option<IpAddr> {
+    let real_ip = || {
         headers
-            .get(name)
+            .get("x-real-ip")
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split(',').next())
             .and_then(parse_ip)
     };
-    trust_headers
-        .then(|| header("x-real-ip").or_else(|| header("x-forwarded-for")))
-        .flatten()
-        .or(peer)
+    // Entries in the order proxies appended them; the leading ones may come from the client.
+    let forwarded = || -> Vec<&str> {
+        headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .collect()
+    };
+    match origin {
+        Origin::Vercel => real_ip().or_else(|| forwarded().first().copied().and_then(parse_ip)),
+        Origin::TrustedProxy => {
+            let forwarded = forwarded();
+            if forwarded.is_empty() {
+                real_ip()
+            } else {
+                forwarded.last().copied().and_then(parse_ip)
+            }
+        }
+        Origin::Direct => None,
+    }
+    .or(peer)
 }
 fn parse_ip(value: &str) -> Option<IpAddr> {
     let value = value.trim();
@@ -1298,31 +1347,87 @@ mod tests {
         assert!(!constant_time_eq(b"secret", b""));
     }
     #[test]
-    fn client_ip_prefers_trusted_headers_then_peer() {
-        let peer: Option<IpAddr> = Some("127.0.0.1".parse().unwrap());
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "203.0.113.7, 10.0.0.1".parse().unwrap());
-        assert_eq!(client_ip(&headers, false, peer), peer);
+    fn forwarded_headers_are_trusted_only_from_vercel_or_a_proxy() {
+        let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+        let loopback = ip("127.0.0.1");
+        let remote = ip("192.0.2.1");
+        assert_eq!(origin(true, Some(false), remote), Origin::Vercel);
+        assert_eq!(origin(false, None, loopback), Origin::TrustedProxy);
         assert_eq!(
-            client_ip(&headers, true, peer),
-            Some("203.0.113.7".parse().unwrap())
+            origin(false, None, ip("::ffff:127.0.0.1")),
+            Origin::TrustedProxy
         );
-        headers.insert("x-real-ip", " 198.51.100.4 ".parse().unwrap());
+        assert_eq!(origin(false, None, ip("::1")), Origin::TrustedProxy);
+        assert_eq!(origin(false, Some(false), loopback), Origin::Direct);
+        assert_eq!(origin(false, None, remote), Origin::Direct);
+        assert_eq!(origin(false, None, None), Origin::Direct);
+        assert_eq!(origin(false, Some(true), remote), Origin::TrustedProxy);
+    }
+    #[test]
+    fn client_ip_resists_spoofed_forwarded_entries() {
+        let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+        let peer = ip("127.0.0.1");
+        let headers = |pairs: &[(&'static str, &str)]| {
+            let mut map = HeaderMap::new();
+            for (name, value) in pairs {
+                map.append(*name, value.parse().unwrap());
+            }
+            map
+        };
+        // nginx's $proxy_add_x_forwarded_for appends the real client to whatever it was sent.
+        let spoofed = headers(&[
+            ("x-forwarded-for", "198.51.100.99, 10.9.9.9, 203.0.113.7"),
+            ("x-real-ip", "198.51.100.99"),
+        ]);
+        let honest = headers(&[("x-forwarded-for", "203.0.113.7")]);
+        let proxied = |h: &HeaderMap| ip_bucket(client_ip(h, Origin::TrustedProxy, peer));
+        assert_eq!(proxied(&spoofed), "203.0.113.7");
+        assert_eq!(proxied(&spoofed), proxied(&honest));
+        let split = headers(&[
+            ("x-forwarded-for", "198.51.100.99"),
+            ("x-forwarded-for", "203.0.113.7"),
+        ]);
+        assert_eq!(proxied(&split), "203.0.113.7");
         assert_eq!(
-            client_ip(&headers, true, None),
-            Some("198.51.100.4".parse().unwrap())
+            client_ip(
+                &headers(&[("x-real-ip", " 203.0.113.8 ")]),
+                Origin::TrustedProxy,
+                peer
+            ),
+            ip("203.0.113.8")
         );
-        headers.insert("x-real-ip", "garbage".parse().unwrap());
         assert_eq!(
-            client_ip(&headers, true, None),
-            Some("203.0.113.7".parse().unwrap())
+            client_ip(
+                &headers(&[("x-forwarded-for", "[2001:db8::1]:443")]),
+                Origin::TrustedProxy,
+                None
+            ),
+            ip("2001:db8::1")
         );
-        headers.insert("x-forwarded-for", "[2001:db8::1]:443".parse().unwrap());
         assert_eq!(
-            client_ip(&headers, true, None),
-            Some("2001:db8::1".parse().unwrap())
+            client_ip(
+                &headers(&[("x-forwarded-for", "garbage")]),
+                Origin::TrustedProxy,
+                peer
+            ),
+            peer
         );
-        assert_eq!(client_ip(&HeaderMap::new(), true, None), None);
+        assert_eq!(
+            client_ip(&HeaderMap::new(), Origin::TrustedProxy, peer),
+            peer
+        );
+        // Vercel overwrites both headers, so its X-Real-IP and first entry are the client.
+        assert_eq!(
+            client_ip(&spoofed, Origin::Vercel, None),
+            ip("198.51.100.99")
+        );
+        assert_eq!(client_ip(&honest, Origin::Vercel, None), ip("203.0.113.7"));
+        assert_eq!(client_ip(&HeaderMap::new(), Origin::Vercel, None), None);
+        // A direct client cannot choose its bucket.
+        assert_eq!(
+            client_ip(&spoofed, Origin::Direct, ip("192.0.2.1")),
+            ip("192.0.2.1")
+        );
     }
     #[tokio::test]
     async fn client_ip_extractor_tolerates_missing_connect_info() {
@@ -1341,6 +1446,15 @@ mod tests {
             ClientIp::from_request_parts(&mut parts, &()).await,
             Ok(ClientIp(Some(peer.ip())))
         );
+        if std::env::var_os("FRIZZI_TRUST_PROXY").is_none() {
+            parts
+                .extensions
+                .insert(ConnectInfo::<SocketAddr>("127.0.0.1:5000".parse().unwrap()));
+            assert_eq!(
+                ClientIp::from_request_parts(&mut parts, &()).await,
+                Ok(ClientIp(Some("203.0.113.7".parse().unwrap())))
+            );
+        }
     }
     #[test]
     fn ip_buckets_group_ipv6_networks() {
