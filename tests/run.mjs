@@ -537,6 +537,7 @@ try{
  await page.getByText('Voto decisivo dell’organizzatore',{exact:true}).waitFor();
  check(await page.getByRole('button',{name:/spareggio/i}).count()===0,'Participants see the deciding vote without organizer controls');
  await page.goto(`${publicUrl}/admin/${browserAdmin}`);
+ await page.getByRole('button',{name:/^Conferma questa data · /}).first().waitFor();
  check(new Set(await page.getByRole('button',{name:/^Conferma questa data · /}).evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')))).size===2,'Each confirm button names its date');
  const confirmDate=page.getByRole('button',{name:/^Conferma questa data · /}).first();
  const confirmDialog=page.getByRole('dialog',{name:'Confermare questa data?'});
