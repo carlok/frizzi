@@ -3,6 +3,7 @@ use crate::{db, locale, places::LocationGeo, ApiError, SlotInput};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{Locale, NaiveDate};
 use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
+use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use sqlx::types::Json;
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -507,10 +508,7 @@ async fn deliver(
         .ok()
         .filter(|host| !host.is_empty());
     if let Some(host) = smtp_host {
-        let port = std::env::var("SMTP_PORT")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1025);
+        let port = std::env::var("SMTP_PORT").ok().and_then(|s| s.parse().ok());
         let message = Message::builder()
             .from(from.parse().map_err(|_| "invalid_mail_from")?)
             .to(to.parse().map_err(|_| "invalid_recipient")?)
@@ -541,10 +539,7 @@ async fn deliver(
                 .body(body.to_owned())
         }
         .map_err(|_| "invalid_smtp_message")?;
-        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
-            .port(port)
-            .timeout(Some(Duration::from_secs(3)))
-            .build()
+        smtp_transport(&host, port)?
             .send(message)
             .await
             .map_err(|error| {
@@ -588,6 +583,36 @@ async fn deliver(
             })?;
     }
     Ok(())
+}
+fn local_smtp(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+}
+/// Loopback relays such as Mailpit run without TLS. Any other host requires STARTTLS and uses
+/// `SMTP_USERNAME`/`SMTP_PASSWORD` when both are set.
+fn smtp_transport(
+    host: &str,
+    port: Option<u16>,
+) -> Result<AsyncSmtpTransport<Tokio1Executor>, &'static str> {
+    let (builder, default_port) = if local_smtp(host) {
+        (
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host),
+            1025,
+        )
+    } else {
+        (
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
+                .map_err(|_| "smtp_tls_config")?,
+            587,
+        )
+    };
+    let mut builder = builder
+        .port(port.unwrap_or(default_port))
+        .timeout(Some(Duration::from_secs(3)));
+    let secret = |name| std::env::var(name).ok().filter(|value| !value.is_empty());
+    if let (Some(username), Some(password)) = (secret("SMTP_USERNAME"), secret("SMTP_PASSWORD")) {
+        builder = builder.credentials(Credentials::new(username, password));
+    }
+    Ok(builder.build())
 }
 pub async fn dispatch(pool: &PgPool, limit: usize) {
     for _ in 0..limit {
@@ -679,6 +704,14 @@ pub async fn inspect_queue(pool: &PgPool) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn remote_smtp_uses_starttls() {
+        assert!(local_smtp("localhost") && local_smtp("127.0.0.1") && local_smtp("::1"));
+        assert!(!local_smtp("smtp.example.com"));
+        assert!(smtp_transport("smtp.example.com", None).is_ok());
+        assert!(smtp_transport("127.0.0.1", Some(1025)).is_ok());
+    }
 
     #[test]
     fn invalid_or_blocked_gemini_text_leaves_the_locale_on_fallback() {

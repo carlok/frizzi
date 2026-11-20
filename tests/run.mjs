@@ -286,6 +286,8 @@ try{
  check(pending==='0','Email queue drained');
  check((await client.query("SELECT count(*) FROM email_outbox WHERE sent_at IS NOT NULL AND (body<>'' OR html IS NOT NULL OR recipient<>'')")).rows[0].count==='0','Delivered secrets removed from both formats in the outbox');
  const unauthorized=await fetch(api+'/api/cron/email');check(unauthorized.status===401,'Cron requires secret');
+ const wrongSecret=cronSecret.slice(0,-1)+(cronSecret.endsWith('0')?'1':'0');
+ check((await fetch(api+'/api/cron/email',{headers:{Authorization:`Bearer ${wrongSecret}`}})).status===401,'Cron rejects a wrong secret of the same length');
 
  // Delivery failure must preserve the event and retry without exposing its private token.
  mailChild.kill('SIGTERM');await new Promise(resolve=>mailChild.once('exit',resolve));
@@ -367,6 +369,14 @@ try{
  `,[retentionId,retentionSlots[0].id])).rows[0];
  assert.deepEqual(remaining,{slots:'0',participants:'0',votes:'0',mail:'0',invitations:'0'});
  check((await messagesFor('expired@example.test')).length===0,'Pending email for expired event was never sent');
+ const flood=await call('/api/events','POST',{...initial,organizer_email:'flood@example.test'});
+ const floodPath=`/api/events/${flood.public_token}/admin/${tokenFrom((await messageFor('flood@example.test')).Text)}`;
+ let limited;
+ for(let i=0;i<25&&!limited;i++){
+  const response=await fetch(web+floodPath,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:i%2?'OPEN':'CANCELLED',confirmed_slot_id:null,locale:'it'})});
+  if(response.status===429)limited=await response.json();else assert.equal(response.status,200);
+ }
+ check(limited?.error==='rate_limited','Repeated status changes on one event are rate limited');
  console.log(`API, database and email checks passed (${checks} assertions).`);
 
  const browserEnv={...process.env};
