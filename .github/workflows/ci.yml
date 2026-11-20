@@ -16,19 +16,20 @@ jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: npm run test:unit --if-present
       - run: npm run build
 
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt, llvm-tools-preview
@@ -39,7 +40,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - run: cargo llvm-cov --lib --lcov --output-path lcov.info
       - run: cargo llvm-cov report --summary-only
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rust-coverage
           path: lcov.info
@@ -49,8 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -58,21 +59,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
       - name: Cache Mailpit and Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/frizzi
             ~/.cache/ms-playwright
           key: e2e-tools-${{ runner.os }}-${{ hashFiles('package-lock.json', 'scripts/setup-tools.mjs') }}
       - run: npx playwright install --with-deps chromium
-      - run: node scripts/setup-tools.mjs
+      - name: Install Mailpit
+        run: |
+          test -x ~/.cache/frizzi/mailpit && exit 0
+          mkdir -p ~/.cache/frizzi && cd ~/.cache/frizzi
+          curl -fsSLO https://github.com/axllent/mailpit/releases/download/v1.34.0/mailpit-linux-amd64.tar.gz
+          echo 'af236b42f171b1c74f0ac5ff444f44d36f2f2ecc0134f5a2f1d4e307e56a0d2c  mailpit-linux-amd64.tar.gz' | sha256sum -c -
+          tar -xzf mailpit-linux-amd64.tar.gz mailpit && chmod +x mailpit
       - run: cargo build --bins
       - run: npm test
         env:
           SKIP_BUILD: '1'
           CARGO: cargo
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-results
           path: test-results/
