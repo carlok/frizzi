@@ -8,8 +8,8 @@ pub use observability::{init_tracing, monitor_public_urls};
 use places::LocationGeo;
 
 use axum::{
-    extract::{DefaultBodyLimit, Path, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Path, State},
+    http::{header, request::Parts, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -22,7 +22,13 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
     PgPool, Postgres, Row, Transaction,
 };
-use std::{str::FromStr, time::Duration};
+use std::{
+    convert::Infallible,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    str::FromStr,
+    sync::LazyLock,
+    time::Duration,
+};
 use uuid::Uuid;
 use validator::ValidateEmail;
 
@@ -83,8 +89,19 @@ fn locale(s: &str) -> &str {
         "it"
     }
 }
+/// Control characters and bidirectional embedding/override/isolate characters can disguise
+/// text in emails and pages. Multi-line fields keep line breaks and tabs.
+fn clean(s: &str, multiline: bool) -> bool {
+    !s.chars().any(|c| {
+        (c.is_control() && !(multiline && matches!(c, '\n' | '\r' | '\t')))
+            || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    })
+}
 fn valid(s: &str, max: usize) -> bool {
-    !s.trim().is_empty() && s.chars().count() <= max
+    !s.trim().is_empty() && s.chars().count() <= max && clean(s, false)
+}
+fn valid_multiline(s: &str, max: usize) -> bool {
+    !s.trim().is_empty() && s.chars().count() <= max && clean(s, true)
 }
 fn email(s: &str) -> Result<String, ApiError> {
     let normalized = s.trim().to_lowercase();
@@ -222,28 +239,140 @@ async fn retry_mail(State(pool): State<PgPool>, headers: HeaderMap) -> ApiResult
         .ok()
         .filter(|s| s.len() >= 32)
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "cron_unconfigured"))?;
-    if headers
+    let provided = headers
         .get(header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
-        != Some(format!("Bearer {secret}").as_str())
-    {
+        .and_then(|h| h.strip_prefix("Bearer "));
+    if !provided.is_some_and(|token| constant_time_eq(token.as_bytes(), secret.as_bytes())) {
         return Err(error(StatusCode::UNAUTHORIZED, "unauthorized"));
     }
     maintain(&pool).await.map_err(db)?;
     maintain_observability(&pool).await;
     Ok(Json(json!({"ok": true})))
 }
-async fn rate_limit(
-    tx: &mut Transaction<'_, Postgres>,
+/// Compares secrets without stopping at the first differing byte. Only the length, which is not
+/// secret, can affect the timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
+// Hourly limits. Per-IP limits come first so that one client cannot use up a shared budget.
+const CREATE_PER_IP: i32 = 20;
+const CREATE_PER_ORGANIZER: i32 = 5;
+const VOTES_PER_IP: i32 = 60;
+const VOTES_PER_PARTICIPANT: i32 = 30;
+const RECOVERY_PER_IP: i32 = 30;
+const RECOVERY_PER_EMAIL: i32 = 3;
+const RECOVERY_PER_EVENT: i32 = 30;
+const MESSAGES_PER_IP: i32 = 10;
+const MESSAGES_PER_EVENT: i32 = 5;
+const STATUS_WRITES_PER_EVENT: i32 = 20;
+const DETAILS_WRITES_PER_EVENT: i32 = 20;
+/// Status and detail changes that email every participant.
+const NOTIFICATIONS_PER_EVENT: i32 = 10;
+
+/// `FRIZZI_RATE_LIMIT_SCALE` multiplies the per-IP limits, for example behind a shared NAT.
+static IP_LIMIT_SCALE: LazyLock<i32> = LazyLock::new(|| {
+    std::env::var("FRIZZI_RATE_LIMIT_SCALE")
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .filter(|scale| *scale > 0)
+        .unwrap_or(1)
+});
+fn per_ip(limit: i32) -> i32 {
+    limit.saturating_mul(*IP_LIMIT_SCALE)
+}
+
+/// The client address used for rate limiting. Proxy headers are trusted only on Vercel, which
+/// overwrites them, or when `FRIZZI_TRUST_PROXY=1`; otherwise the socket peer is used.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ClientIp(Option<IpAddr>);
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = Infallible;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Infallible> {
+        let trust_headers = parts.extensions.get::<vercel_runtime::AppState>().is_some()
+            || std::env::var("FRIZZI_TRUST_PROXY").is_ok_and(|v| v == "1");
+        let peer = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|info| info.0.ip());
+        Ok(ClientIp(client_ip(&parts.headers, trust_headers, peer)))
+    }
+}
+impl ClientIp {
+    fn key(&self, scope: &str) -> String {
+        format!("{scope}-ip:{}", ip_bucket(self.0))
+    }
+}
+fn client_ip(headers: &HeaderMap, trust_headers: bool, peer: Option<IpAddr>) -> Option<IpAddr> {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .and_then(parse_ip)
+    };
+    trust_headers
+        .then(|| header("x-real-ip").or_else(|| header("x-forwarded-for")))
+        .flatten()
+        .or(peer)
+}
+fn parse_ip(value: &str) -> Option<IpAddr> {
+    let value = value.trim();
+    value
+        .parse()
+        .ok()
+        .or_else(|| value.parse::<SocketAddr>().ok().map(|addr| addr.ip()))
+}
+/// IPv6 clients usually control a whole /64, so they share one bucket.
+fn ip_bucket(ip: Option<IpAddr>) -> String {
+    match ip.map(|ip| ip.to_canonical()) {
+        Some(IpAddr::V4(ip)) => ip.to_string(),
+        Some(IpAddr::V6(ip)) => {
+            let s = ip.segments();
+            format!("{}/64", Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+        }
+        None => "unknown".into(),
+    }
+}
+
+/// Counts a request against `key` in the current hour. Callers pass the pool so the increment
+/// commits on its own and still counts when the request later fails and rolls back.
+async fn rate_limit<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     key: &str,
     limit: i32,
 ) -> Result<(), ApiError> {
     let count: i32 = sqlx::query_scalar("INSERT INTO request_limits (key) VALUES ($1) ON CONFLICT (key, hour) DO UPDATE SET count=request_limits.count+1 RETURNING count")
-        .bind(key).fetch_one(&mut **tx).await.map_err(db)?;
+        .bind(key).fetch_one(executor).await.map_err(db)?;
     if count > limit {
         return Err(error(StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
     }
     Ok(())
+}
+/// Checks the limits in order and stops at the first one exceeded.
+async fn rate_limits(pool: &PgPool, limits: &[(String, i32)]) -> Result<(), ApiError> {
+    for (key, limit) in limits {
+        rate_limit(pool, key, *limit).await?;
+    }
+    Ok(())
+}
+/// Counts a notification to every participant inside the transaction that enqueues it, so only
+/// committed notifications count. The write limits above bound failed attempts.
+async fn limit_notifications(
+    tx: &mut Transaction<'_, Postgres>,
+    event: Uuid,
+) -> Result<(), ApiError> {
+    rate_limit(
+        &mut **tx,
+        &format!("notify:{event}"),
+        NOTIFICATIONS_PER_EVENT,
+    )
+    .await
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -286,7 +415,7 @@ fn validate_details(
         && valid(organizer, 100)
         && description
             .as_ref()
-            .is_none_or(|s| s.chars().count() <= 10000)
+            .is_none_or(|s| s.chars().count() <= 10000 && clean(s, true))
         && timezone.parse::<chrono_tz::Tz>().is_ok()
         && !slots.is_empty()
         && slots.len() <= 100
@@ -310,6 +439,7 @@ fn validate_deadline(deadline: Option<NaiveDate>, timezone: &str) -> Result<(), 
 async fn create(
     State(pool): State<PgPool>,
     runtime: Runtime,
+    ip: ClientIp,
     Json(e): Json<EventInput>,
 ) -> ApiResult {
     let organizer_email = email(&e.organizer_email)?;
@@ -330,8 +460,15 @@ async fn create(
     }
     let public = nanoid::nanoid!();
     let secret = nanoid::nanoid!();
+    rate_limits(
+        &pool,
+        &[
+            (ip.key("create"), per_ip(CREATE_PER_IP)),
+            (format!("create:{organizer_email}"), CREATE_PER_ORGANIZER),
+        ],
+    )
+    .await?;
     let mut tx = pool.begin().await.map_err(db)?;
-    rate_limit(&mut tx, &format!("create:{organizer_email}"), 5).await?;
     let id: Uuid = sqlx::query_scalar("INSERT INTO events (public_token,admin_token,title,description,location,organizer_name,organizer_email,organizer_locale,allow_multiple_choices,timezone,voting_deadline,location_geo) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id")
         .bind(&public).bind(&secret).bind(e.title.trim()).bind(&e.description).bind(e.location.trim())
         .bind(e.organizer_name.trim()).bind(&organizer_email).bind(locale(&e.locale))
@@ -403,24 +540,32 @@ struct VoteInput {
 async fn vote(
     State(pool): State<PgPool>,
     runtime: Runtime,
+    ip: ClientIp,
     Path(public): Path<String>,
     Json(v): Json<VoteInput>,
 ) -> ApiResult {
-    let response = save_vote(&pool, &public, None, v).await?;
+    let response = save_vote(&pool, ip, &public, None, v).await?;
     schedule_mail(pool, runtime);
     Ok(response)
 }
 async fn edit_vote(
     State(pool): State<PgPool>,
     runtime: Runtime,
+    ip: ClientIp,
     Path((public, secret)): Path<(String, String)>,
     Json(v): Json<VoteInput>,
 ) -> ApiResult {
-    let response = save_vote(&pool, &public, Some(&secret), v).await?;
+    let response = save_vote(&pool, ip, &public, Some(&secret), v).await?;
     schedule_mail(pool, runtime);
     Ok(response)
 }
-async fn save_vote(pool: &PgPool, public: &str, secret: Option<&str>, v: VoteInput) -> ApiResult {
+async fn save_vote(
+    pool: &PgPool,
+    ip: ClientIp,
+    public: &str,
+    secret: Option<&str>,
+    v: VoteInput,
+) -> ApiResult {
     let email = email(&v.email)?;
     if !valid_token(public) || secret.is_some_and(|s| !valid_token(s)) {
         return Err(missing());
@@ -428,6 +573,14 @@ async fn save_vote(pool: &PgPool, public: &str, secret: Option<&str>, v: VoteInp
     if !valid(&v.name, 100) || v.slots.len() > 100 {
         return Err(bad());
     }
+    rate_limits(
+        pool,
+        &[
+            (ip.key("vote"), per_ip(VOTES_PER_IP)),
+            (format!("vote:{public}:{email}"), VOTES_PER_PARTICIPANT),
+        ],
+    )
+    .await?;
     let mut tx = pool.begin().await.map_err(db)?;
     let event = sqlx::query("SELECT id,title,allow_multiple_choices,status::text,timezone,voting_deadline,tiebreak_slot_id FROM events WHERE public_token=$1 FOR UPDATE")
         .bind(public).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
@@ -454,7 +607,6 @@ async fn save_vote(pool: &PgPool, public: &str, secret: Option<&str>, v: VoteInp
     if n as usize != v.slots.len() {
         return Err(bad());
     }
-    rate_limit(&mut tx, &format!("vote:{id}:{email}"), 30).await?;
     let (pid, edit_token): (Uuid, String) = if let Some(secret) = secret {
         let row = sqlx::query("UPDATE participants SET name=$1,email=$2,locale=$3,updated_at=now() WHERE event_id=$4 AND edit_token=$5 RETURNING id,edit_token")
             .bind(v.name.trim()).bind(&email).bind(locale(&v.locale)).bind(id).bind(secret)
@@ -513,6 +665,7 @@ struct RecoveryInput {
 async fn recover_links(
     State(pool): State<PgPool>,
     runtime: Runtime,
+    ip: ClientIp,
     Path(public): Path<String>,
     Json(input): Json<RecoveryInput>,
 ) -> ApiResult {
@@ -521,19 +674,23 @@ async fn recover_links(
     if !valid_token(&public) {
         return Ok(accepted);
     }
-
-    let mut tx = pool.begin().await.map_err(db)?;
-    for (key, limit) in [
-        (format!("recover-email:{address}"), 3),
-        (format!("recover-event:{public}"), 30),
-    ] {
-        if let Err(err) = rate_limit(&mut tx, &key, limit).await {
-            if err.0 == StatusCode::TOO_MANY_REQUESTS {
-                return Ok(accepted);
-            }
-            return Err(err);
+    rate_limit(&pool, &ip.key("recover"), per_ip(RECOVERY_PER_IP)).await?;
+    // Address and event limits answer like a normal request so they reveal nothing.
+    if let Err(err) = rate_limits(
+        &pool,
+        &[
+            (format!("recover-email:{address}"), RECOVERY_PER_EMAIL),
+            (format!("recover-event:{public}"), RECOVERY_PER_EVENT),
+        ],
+    )
+    .await
+    {
+        if err.0 == StatusCode::TOO_MANY_REQUESTS {
+            return Ok(accepted);
         }
+        return Err(err);
     }
+    let mut tx = pool.begin().await.map_err(db)?;
     let Some(event) = sqlx::query("SELECT id FROM events WHERE public_token=$1 FOR KEY SHARE")
         .bind(&public)
         .fetch_optional(&mut *tx)
@@ -606,22 +763,18 @@ async fn admin(
     authorize_admin(&pool, &public, &secret).await?;
     get_event(&pool, &public).await
 }
-async fn authorize_admin(pool: &PgPool, public: &str, secret: &str) -> Result<(), ApiError> {
+/// Returns the event id for a valid organizer link.
+async fn authorize_admin(pool: &PgPool, public: &str, secret: &str) -> Result<Uuid, ApiError> {
     if !valid_token(public) || !valid_token(secret) {
         return Err(missing());
     }
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM events WHERE public_token=$1 AND admin_token=$2)",
-    )
-    .bind(public)
-    .bind(secret)
-    .fetch_one(pool)
-    .await
-    .map_err(db)?;
-    if !exists {
-        return Err(missing());
-    }
-    Ok(())
+    sqlx::query_scalar("SELECT id FROM events WHERE public_token=$1 AND admin_token=$2")
+        .bind(public)
+        .bind(secret)
+        .fetch_optional(pool)
+        .await
+        .map_err(db)?
+        .ok_or_else(missing)
 }
 #[derive(Deserialize)]
 struct StatusInput {
@@ -645,7 +798,8 @@ async fn update_status(
     if (v.status == "CONFIRMED") != v.confirmed_slot_id.is_some() {
         return Err(bad());
     }
-    authorize_admin(&pool, &public, &secret).await?;
+    let event = authorize_admin(&pool, &public, &secret).await?;
+    rate_limit(&pool, &format!("status:{event}"), STATUS_WRITES_PER_EVENT).await?;
     let confirmation = match v.confirmed_slot_id {
         Some(slot) => mail::prepare_confirmation(&pool, &public, &secret, slot, &v.locale).await,
         None => None,
@@ -667,12 +821,15 @@ async fn update_status(
             return Err(bad());
         }
     }
+    let changed = e.get::<String, _>("status") != v.status
+        || e.get::<Option<Uuid>, _>("confirmed_slot_id") != v.confirmed_slot_id;
+    if changed {
+        limit_notifications(&mut tx, id).await?;
+    }
     sqlx::query("UPDATE events SET status=$1::event_status,confirmed_slot_id=$2,organizer_locale=$3,updated_at=now(),
        tiebreak_slot_id=CASE WHEN ($1='CONFIRMED' AND tiebreak_slot_id=$2) OR ($1='OPEN' AND status='OPEN')
                            THEN tiebreak_slot_id ELSE NULL END WHERE id=$4")
         .bind(&v.status).bind(v.confirmed_slot_id).bind(locale(&v.locale)).bind(id).execute(&mut *tx).await.map_err(db)?;
-    let changed = e.get::<String, _>("status") != v.status
-        || e.get::<Option<Uuid>, _>("confirmed_slot_id") != v.confirmed_slot_id;
     if changed {
         mail::notify(&mut tx, id, &v.status, None, confirmation.as_ref()).await?;
     }
@@ -755,15 +912,38 @@ struct ParticipantMessage {
 async fn message_participants(
     State(pool): State<PgPool>,
     runtime: Runtime,
+    ip: ClientIp,
     Path((public, secret)): Path<(String, String)>,
     Json(input): Json<ParticipantMessage>,
 ) -> ApiResult {
     if !valid_token(&public) || !valid_token(&secret) {
         return Err(missing());
     }
-    if !valid(&input.message, 2000) {
+    if !valid_multiline(&input.message, 2000) {
         return Err(bad());
     }
+    let event = authorize_admin(&pool, &public, &secret).await?;
+    // A retried request returns its receipt without counting against the limits.
+    let existing: Option<i32> = sqlx::query_scalar(
+        "SELECT recipients FROM participant_messages WHERE event_id=$1 AND request_id=$2",
+    )
+    .bind(event)
+    .bind(input.request_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(db)?;
+    if let Some(queued) = existing {
+        schedule_mail(pool, runtime);
+        return Ok(Json(json!({"queued": queued})));
+    }
+    rate_limits(
+        &pool,
+        &[
+            (ip.key("participant-message"), per_ip(MESSAGES_PER_IP)),
+            (format!("participant-message:{event}"), MESSAGES_PER_EVENT),
+        ],
+    )
+    .await?;
     let mut tx = pool.begin().await.map_err(db)?;
     let event = sqlx::query(
         "SELECT id,title FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE",
@@ -788,7 +968,6 @@ async fn message_participants(
         schedule_mail(pool, runtime);
         return Ok(Json(json!({"queued": queued})));
     }
-    rate_limit(&mut tx, &format!("participant-message:{id}"), 5).await?;
     let queued = mail::enqueue_participant_message(
         &mut tx,
         id,
@@ -851,7 +1030,8 @@ async fn update_details(
     ) {
         return Err(bad());
     }
-    authorize_admin(&pool, &public, &secret).await?;
+    let event = authorize_admin(&pool, &public, &secret).await?;
+    rate_limit(&pool, &format!("details:{event}"), DETAILS_WRITES_PER_EVENT).await?;
     let mut tx = pool.begin().await.map_err(db)?;
     let old = sqlx::query("SELECT id,title,description,location,organizer_name,allow_multiple_choices,timezone,voting_deadline,location_geo FROM events WHERE public_token=$1 AND admin_token=$2 FOR UPDATE")
         .bind(public).bind(secret).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
@@ -953,6 +1133,10 @@ async fn update_details(
             ),
         ));
     }
+    let notify = dates_changed || !changes.is_empty();
+    if notify {
+        limit_notifications(&mut tx, id).await?;
+    }
     if dates_changed || old.get::<String, _>("timezone") != v.timezone {
         // A changed date/time is a new availability question; preserve only unaffected votes.
         sqlx::query("UPDATE events SET status='OPEN',confirmed_slot_id=NULL,tiebreak_slot_id=NULL WHERE id=$1")
@@ -990,7 +1174,7 @@ async fn update_details(
     sqlx::query("UPDATE events SET title=$1,description=$2,location=$3,organizer_name=$4,allow_multiple_choices=$5,timezone=$6,organizer_locale=$7,voting_deadline=$8,location_geo=$9,updated_at=now() WHERE id=$10")
         .bind(v.title.trim()).bind(&v.description).bind(v.location.trim()).bind(v.organizer_name.trim()).bind(v.allow_multiple_choices)
         .bind(&v.timezone).bind(locale(&v.locale)).bind(deadline).bind(geo.map(sqlx::types::Json)).bind(id).execute(&mut *tx).await.map_err(db)?;
-    if dates_changed || !changes.is_empty() {
+    if notify {
         mail::notify(
             &mut tx,
             id,
@@ -1060,5 +1244,113 @@ mod tests {
         assert_eq!(locale("ar"), "ar");
         assert_eq!(locale("xx"), "it");
         assert_eq!(email(" ADA@example.com ").unwrap(), "ada@example.com");
+    }
+    #[test]
+    fn text_rejects_control_and_bidi_characters() {
+        assert!(valid("Cena da Ada", 20));
+        assert!(valid("عشاء", 20));
+        assert!(!valid(" ", 20));
+        assert!(!valid("abc", 2));
+        for bad in [
+            "a\nb",
+            "a\tb",
+            "a\u{0}b",
+            "a\u{1b}[31mb",
+            "a\u{7f}b",
+            "a\u{85}b",
+            "a\u{202A}b",
+            "a\u{202E}b",
+            "a\u{2066}b",
+            "a\u{2069}b",
+        ] {
+            assert!(!valid(bad, 20), "{bad:?}");
+        }
+        assert!(valid_multiline("Ciao,\r\n\tci vediamo", 50));
+        assert!(!valid_multiline("Ciao\u{7}", 50));
+        assert!(!valid_multiline("Ciao\u{202E}", 50));
+        let slots = [SlotInput {
+            id: None,
+            date: NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+            start: NaiveTime::from_hms_opt(20, 0, 0).unwrap(),
+            end: None,
+        }];
+        let details = |description: &str| {
+            validate_details(
+                "Cena",
+                &Some(description.into()),
+                "Roma",
+                "Ada",
+                "Europe/Rome",
+                &slots,
+            )
+        };
+        assert!(details("Prima riga\nSeconda\triga"));
+        assert!(details(""));
+        assert!(!details("Testo\u{202E}nascosto"));
+        assert!(!details("Testo\u{8}"));
+    }
+    #[test]
+    fn constant_time_comparison() {
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"secret-value", b"secret-value"));
+        assert!(!constant_time_eq(b"secret-value", b"secret-valuf"));
+        assert!(!constant_time_eq(b"secret-value", b"secret-valu"));
+        assert!(!constant_time_eq(b"secret", b""));
+    }
+    #[test]
+    fn client_ip_prefers_trusted_headers_then_peer() {
+        let peer: Option<IpAddr> = Some("127.0.0.1".parse().unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.7, 10.0.0.1".parse().unwrap());
+        assert_eq!(client_ip(&headers, false, peer), peer);
+        assert_eq!(
+            client_ip(&headers, true, peer),
+            Some("203.0.113.7".parse().unwrap())
+        );
+        headers.insert("x-real-ip", " 198.51.100.4 ".parse().unwrap());
+        assert_eq!(
+            client_ip(&headers, true, None),
+            Some("198.51.100.4".parse().unwrap())
+        );
+        headers.insert("x-real-ip", "garbage".parse().unwrap());
+        assert_eq!(
+            client_ip(&headers, true, None),
+            Some("203.0.113.7".parse().unwrap())
+        );
+        headers.insert("x-forwarded-for", "[2001:db8::1]:443".parse().unwrap());
+        assert_eq!(
+            client_ip(&headers, true, None),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        assert_eq!(client_ip(&HeaderMap::new(), true, None), None);
+    }
+    #[tokio::test]
+    async fn client_ip_extractor_tolerates_missing_connect_info() {
+        let request = axum::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.7")
+            .body(())
+            .unwrap();
+        let (mut parts, ()) = request.into_parts();
+        assert_eq!(
+            ClientIp::from_request_parts(&mut parts, &()).await,
+            Ok(ClientIp(None))
+        );
+        let peer: SocketAddr = "192.0.2.1:5000".parse().unwrap();
+        parts.extensions.insert(ConnectInfo(peer));
+        assert_eq!(
+            ClientIp::from_request_parts(&mut parts, &()).await,
+            Ok(ClientIp(Some(peer.ip())))
+        );
+    }
+    #[test]
+    fn ip_buckets_group_ipv6_networks() {
+        let bucket = |ip: &str| ip_bucket(Some(ip.parse().unwrap()));
+        assert_eq!(bucket("203.0.113.7"), "203.0.113.7");
+        assert_eq!(bucket("::ffff:203.0.113.7"), "203.0.113.7");
+        assert_eq!(bucket("2001:db8:1:2:3:4:5:6"), "2001:db8:1:2::/64");
+        assert_eq!(bucket("2001:db8:1:2:ffff::1"), "2001:db8:1:2::/64");
+        assert_ne!(bucket("2001:db8:1:3::1"), bucket("2001:db8:1:2::1"));
+        assert_eq!(ip_bucket(None), "unknown");
+        assert_eq!(ClientIp(None).key("vote"), "vote-ip:unknown");
     }
 }

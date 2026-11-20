@@ -5,7 +5,12 @@ use sqlx::PgPool;
 use std::{sync::LazyLock, time::Duration};
 
 use crate::observability::upstream_class;
-use crate::{bad, db, locale, rate_limit, ApiError, ApiResult};
+use crate::{bad, locale, per_ip, rate_limits, ApiError, ApiResult, ClientIp};
+
+/// Lookups per client per hour, within the global cap below.
+const LOOKUPS_PER_IP: i32 = 30;
+/// 120 lookups per hour keeps the public endpoint within the free daily allowance.
+const LOOKUPS_PER_HOUR: i32 = 120;
 
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
@@ -169,7 +174,11 @@ impl ProviderPlace {
     }
 }
 
-pub async fn suggest(State(pool): State<PgPool>, Json(search): Json<Search>) -> ApiResult {
+pub async fn suggest(
+    State(pool): State<PgPool>,
+    ip: ClientIp,
+    Json(search): Json<Search>,
+) -> ApiResult {
     let text = search.text.trim();
     if !(3..=255).contains(&text.chars().count()) || text.contains("://") {
         return Err(bad());
@@ -181,10 +190,14 @@ pub async fn suggest(State(pool): State<PgPool>, Json(search): Json<Search>) -> 
         return Ok(Json(json!({"enabled": false, "suggestions": []})));
     };
 
-    // 120 lookups per hour keeps the public endpoint within the free daily allowance.
-    let mut tx = pool.begin().await.map_err(db)?;
-    rate_limit(&mut tx, "geoapify:autocomplete", 120).await?;
-    tx.commit().await.map_err(db)?;
+    rate_limits(
+        &pool,
+        &[
+            (ip.key("geoapify"), per_ip(LOOKUPS_PER_IP)),
+            ("geoapify:autocomplete".into(), LOOKUPS_PER_HOUR),
+        ],
+    )
+    .await?;
 
     let response = CLIENT
         .get("https://api.geoapify.com/v1/geocode/autocomplete")
