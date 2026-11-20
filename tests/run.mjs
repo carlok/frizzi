@@ -466,7 +466,7 @@ try{
  await checkboxes.last().check();
  await aprilDay.waitFor();
  check(await aprilDay.getAttribute('aria-pressed')==='true','Checkbox selects and reveals a date in another month');
- check(await page.locator('.event-calendar').getAttribute('aria-hidden')==='true'&&await marchDay.getAttribute('tabindex')==='-1','The calendar mirrors the date list for pointer users only');
+ check(await page.locator('.event-calendar').getAttribute('aria-hidden')==='true'&&await aprilDay.getAttribute('tabindex')==='-1','The calendar mirrors the date list for pointer users only');
  await page.locator('.calendar-month button[aria-label="Mese precedente"]').click();
  check(await marchDay.getAttribute('aria-pressed')==='true','Selections survive month navigation');
  await checkboxes.last().uncheck();
