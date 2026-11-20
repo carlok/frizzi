@@ -104,6 +104,8 @@ If Chromium’s dependencies are missing on Linux, install them with `npx playwr
 
 `npm test` starts a temporary PostgreSQL 16 database, Mailpit, the Rust API and Vite on dedicated ports. Integration tests cover event creation, privacy, authorisation, isolation between events, voting, edits, localised notifications and SMTP retries. Browser checks cover all eleven languages, right-to-left layout, language persistence, the event workflow and mobile rendering. Screenshots go to `test-results/`. Test emails stay in the local Mailpit inbox.
 
+The suite uses `$MAILPIT` or a `mailpit` on `PATH`, and otherwise `npm run test:setup` downloads a hash-verified release for Linux or macOS (x86-64 or arm64). `CARGO` overrides the `cargo` on `PATH`. Set `FRIZZI_TEST_PG_PORT`, `FRIZZI_TEST_SMTP_PORT`, `FRIZZI_TEST_MAIL_UI_PORT`, `FRIZZI_TEST_API_PORT` or `FRIZZI_TEST_WEB_PORT` to move a service off its default port. `FRIZZI_TEST_TIMEOUT_SCALE` (for example `2`) stretches the wait budgets on slow machines, and `FRIZZI_TEST_WATCHDOG_MS` (default 15 minutes) caps the run. On failure, the suite saves a screenshot and a Playwright trace of each open page in `test-results/`. Ctrl-C stops every service and removes the temporary data.
+
 ## Retention
 
 Polls remain available through the end of the tenth day after the event date, in the event’s time zone. If the organiser has not confirmed a date, the latest proposed date applies. Maintenance deletes expired event data and rotates aggregate usage metrics. The API emits structured JSON logs. Set `FRIZZI_LOG_DIR` to write the logs to daily files with local rotation.
