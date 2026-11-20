@@ -188,6 +188,7 @@ try{
  check(calendarResponse.ok && calendarResponse.headers.get('content-type').startsWith('text/calendar'),'Calendar download');
  check(ical.includes('DTSTART:20300203T190000Z') && ical.includes('DTEND:20300203T210000Z'),'Calendar preserves the event time zone');
  check(!ical.includes(adminToken) && !ical.includes(editToken),'Calendar contains no private links');
+ check(ical.includes('\r\nMETHOD:PUBLISH\r\n')&&ical.includes(`\r\nUID:${publicToken}@frizzi\r\n`)&&/\r\nSEQUENCE:\d+\r\n/.test(ical),'Calendar is a publishable revision with a stable UID');
  const confirmation=await messageFor(v.email,'🎉 ¡Ya tenemos fecha!');
  const confirmedMail=confirmation.Text;
  check(confirmedMail.includes(eventPath+'/calendar.ics'),'Calendar URL in confirmation email');
