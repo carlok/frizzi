@@ -1,5 +1,7 @@
+use crate::error::{db, ApiError};
 use crate::observability::{db_class, upstream_class};
-use crate::{db, locale, places::LocationGeo, ApiError, SlotInput};
+use crate::validate::locale;
+use crate::{places::LocationGeo, slots::SlotInput};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{Locale, NaiveDate, NaiveTime};
 use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
@@ -336,7 +338,7 @@ pub async fn enqueue_participant_message(
     title: &str,
     input: &str,
 ) -> Result<u64, ApiError> {
-    let message = template::MessageText::parse(input).ok_or_else(crate::bad)?;
+    let message = template::MessageText::parse(input).ok_or_else(crate::error::bad)?;
     let languages: Vec<String> =
         sqlx::query_scalar("SELECT DISTINCT locale FROM participants WHERE event_id=$1")
             .bind(event)
