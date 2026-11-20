@@ -532,11 +532,17 @@ try{
  await confirmedDay.waitFor();
  check(await page.locator('button[data-calendar-date]').count()===0,'Closed participant calendar shows saved and confirmed dates in read-only mode');
  check(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Calendar layout fits narrow mobile screens');
+ await call(`/api/events/${single.public_token}/votes`,'POST',{name:'Organizer too',email:'SINGLE@example.test',locale:'de',slots:[]});
+ const singleVoter=tokenFrom((await messageFor('single@example.test','✅')).Text);
  await client.query("UPDATE events SET voting_deadline='2000-01-01' WHERE public_token=$1",[single.public_token]);
  await page.goto(web+'/'+single.public_token);
  await status.filter({hasText:'Sondaggio chiuso'}).waitFor();
  check(await status.getAttribute('data-state')==='closed'&&await status.locator('svg').count()===1,'An expired poll is labeled closed with an icon');
  await call(`/api/events/${single.public_token}/admin/${singleAdmin}`,'PUT',{status:'CANCELLED',confirmed_slot_id:null,locale:'it'});
+ await messageFor('single@example.test','📌');await queueDrained();
+ const organizerCancel=(await messagesFor('single@example.test')).filter(m=>m.Subject.startsWith('📌'));
+ const organizerCancelText=(await messageFor('single@example.test','📌')).Text;
+ check(organizerCancel.length===1&&tokenFrom(organizerCancelText)===singleAdmin&&organizerCancelText.includes(`/${single.public_token}/${singleVoter}`),'An organizer who voted gets one notification with both private links');
  await page.reload();
  await status.filter({hasText:'Evento annullato'}).waitFor();
  check(await status.getAttribute('data-state')==='cancelled'&&await partyImage.count()===0,'Cancelled event has a distinct badge and no celebration art');

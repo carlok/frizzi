@@ -247,6 +247,7 @@ pub async fn summary(
         confirmed: confirmed.is_some(),
         website: None,
         calendar: None,
+        response: None,
         notes: String::new(),
     })
 }
@@ -368,6 +369,26 @@ pub async fn enqueue_participant_message(
     Ok(result.rows_affected())
 }
 type Changes<'a> = Option<(&'a [(String, String, String)], &'a [SlotInput], bool)>;
+
+struct Recipient {
+    email: String,
+    locale: String,
+    url: String,
+    /// Secondary participant link, set when the organizer also voted with this address.
+    response: Option<String>,
+}
+
+/// One notification per address: an organizer who also voted gets the organizer email (admin
+/// link, organizer language) carrying their participant link too, since only that page edits
+/// their own availability.
+fn recipients(mut participants: Vec<Recipient>, mut organizer: Recipient) -> Vec<Recipient> {
+    let same = |p: &Recipient| p.email.trim().eq_ignore_ascii_case(organizer.email.trim());
+    if let Some(index) = participants.iter().position(same) {
+        organizer.response = Some(participants.remove(index).url);
+    }
+    participants.push(organizer);
+    participants
+}
 pub async fn notify(
     tx: &mut Transaction<'_, Postgres>,
     event: Uuid,
@@ -388,31 +409,31 @@ pub async fn notify(
             .fetch_all(&mut **tx)
             .await
             .map_err(db)?;
-    let mut recipients: Vec<(String, String, String)> = participants
+    let participants = participants
         .iter()
-        .map(|p| {
-            (
-                p.get("email"),
-                p.get("locale"),
-                format!(
-                    "{}/{}/{}",
-                    base_url(),
-                    public,
-                    p.get::<String, _>("edit_token")
-                ),
-            )
+        .map(|p| Recipient {
+            email: p.get("email"),
+            locale: p.get("locale"),
+            url: format!(
+                "{}/{}/{}",
+                base_url(),
+                public,
+                p.get::<String, _>("edit_token")
+            ),
+            response: None,
         })
         .collect();
-    recipients.push((
-        e.get("organizer_email"),
-        e.get("organizer_locale"),
-        format!(
+    let organizer_recipient = Recipient {
+        email: e.get("organizer_email"),
+        locale: e.get("organizer_locale"),
+        url: format!(
             "{}/{}/admin/{}",
             base_url(),
             public,
             e.get::<String, _>("admin_token")
         ),
-    ));
+        response: None,
+    };
     let kind = match kind {
         "CONFIRMED" => "confirmed",
         "CANCELLED" => "cancelled",
@@ -421,12 +442,13 @@ pub async fn notify(
     };
     let title: String = e.get("title");
     let organizer: String = e.get("organizer_name");
-    // Everything except the recipient's link depends only on the language, so the summary
+    let recipients = recipients(participants, organizer_recipient);
+    // Everything except the recipient's links depends only on the language, so the summary
     // queries, change notes and invitation snapshot are built once per language.
     let mut languages: HashMap<&str, (Details, Option<Uuid>)> = HashMap::new();
     let mut messages = Vec::with_capacity(recipients.len());
-    for (email, lang, url) in &recipients {
-        let lang = locale(lang);
+    for recipient in &recipients {
+        let lang = locale(&recipient.locale);
         let intro = confirmation
             .and_then(|extra| extra.intros.get(lang))
             .map(String::as_str);
@@ -445,9 +467,17 @@ pub async fn notify(
             languages.insert(lang, (details, invitation_id));
         }
         let (details, invitation_id) = &languages[lang];
-        let message = compose(lang, kind, &title, url, Some(details), intro);
+        let message = match &recipient.response {
+            // Only an organizer who also voted needs a second link; copy the shared details.
+            Some(response) => {
+                let mut details = details.clone();
+                details.response = Some(response.clone());
+                compose(lang, kind, &title, &recipient.url, Some(&details), intro)
+            }
+            None => compose(lang, kind, &title, &recipient.url, Some(details), intro),
+        };
         messages.push(serde_json::json!({
-            "recipient": email,
+            "recipient": recipient.email,
             "subject": message.subject,
             "body": message.body,
             "html": message.html,
@@ -895,6 +925,41 @@ mod tests {
         assert!(!gives_up(&transient, 1) && !gives_up(&transient, MAX_ATTEMPTS - 1));
         assert!(gives_up(&transient, MAX_ATTEMPTS));
         assert!(gives_up(&DeliveryError::rejected("invalid_recipient"), 1));
+    }
+
+    #[test]
+    fn an_organizer_who_voted_gets_one_email_with_both_links() {
+        let person = |email: &str, url: &str| Recipient {
+            email: email.into(),
+            locale: "es".into(),
+            url: url.into(),
+            response: None,
+        };
+        let organizer = Recipient {
+            locale: "it".into(),
+            ..person("ada@example.test", "/admin")
+        };
+        let list = recipients(
+            vec![
+                person("lucia@example.test", "/lucia"),
+                person("ADA@example.test", "/ada"),
+            ],
+            organizer,
+        );
+        let summary: Vec<_> = list
+            .iter()
+            .map(|r| (r.url.as_str(), r.locale.as_str(), r.response.as_deref()))
+            .collect();
+        assert_eq!(
+            summary,
+            [("/lucia", "es", None), ("/admin", "it", Some("/ada"))]
+        );
+        let alone = recipients(
+            vec![person("lucia@example.test", "/lucia")],
+            person("ada@example.test", "/admin"),
+        );
+        assert_eq!(alone.len(), 2);
+        assert!(alone.iter().all(|r| r.response.is_none()));
     }
 
     #[test]
