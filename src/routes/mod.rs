@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::time::Duration;
@@ -62,6 +63,12 @@ pub fn router(pool: PgPool) -> Router {
             observability::request,
         ))
         .with_state(pool)
+}
+/// Renders a response body through [`Value`], whose objects keep their keys sorted, so a
+/// response struct produces the same bytes as the `json!` literal it replaced, nested types
+/// included.
+fn sorted_json<T: Serialize>(body: &T) -> Json<Value> {
+    Json(serde_json::to_value(body).expect("response bodies serialize to JSON"))
 }
 async fn ready(State(pool): State<PgPool>) -> (StatusCode, Json<Value>) {
     let result = tokio::time::timeout(

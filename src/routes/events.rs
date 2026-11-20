@@ -6,11 +6,12 @@ use axum::{
     Json,
 };
 use chrono::{NaiveDate, NaiveTime};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+use super::sorted_json;
 use crate::error::{bad, db, error, missing, ApiResult};
 use crate::limits::{per_ip, rate_limits, ClientIp, CREATE_PER_IP, CREATE_PER_ORGANIZER};
 use crate::mail::{Email, MailKind};
@@ -96,18 +97,139 @@ pub(super) async fn public_event(
 ) -> ApiResult {
     get_event(&pool, &public).await
 }
+/// The event page shared by the public and organizer links.
+#[derive(FromRow, Serialize)]
+pub(super) struct EventView {
+    #[serde(skip)]
+    id: Uuid,
+    title: String,
+    description: Option<String>,
+    location: String,
+    location_geo: Option<sqlx::types::Json<LocationGeo>>,
+    organizer_name: String,
+    allow_multiple_choices: bool,
+    status: Status,
+    confirmed_slot_id: Option<Uuid>,
+    tiebreak_slot_id: Option<Uuid>,
+    timezone: String,
+    voting_deadline: Option<NaiveDate>,
+    #[sqlx(skip)]
+    voting_ended: bool,
+    #[sqlx(skip)]
+    slots: Vec<SlotView>,
+    #[sqlx(skip)]
+    participants: Vec<ParticipantView>,
+}
+#[derive(FromRow, Serialize)]
+struct SlotView {
+    id: Uuid,
+    #[sqlx(rename = "slot_date")]
+    date: NaiveDate,
+    #[sqlx(rename = "start_time")]
+    start: NaiveTime,
+    #[sqlx(rename = "end_time")]
+    end: Option<NaiveTime>,
+}
+/// A participant's name and chosen slots; addresses and links stay private.
+#[derive(FromRow, Serialize)]
+struct ParticipantView {
+    name: String,
+    slots: Vec<Uuid>,
+}
 pub(super) async fn get_event(pool: &PgPool, public: &str) -> ApiResult {
     if !valid_token(public) {
         return Err(missing());
     }
-    let e = sqlx::query("SELECT id,title,description,location,organizer_name,allow_multiple_choices,status::text,confirmed_slot_id,tiebreak_slot_id,timezone,voting_deadline,location_geo FROM events WHERE public_token=$1")
+    let mut event: EventView = sqlx::query_as("SELECT id,title,description,location,organizer_name,allow_multiple_choices,status::text,confirmed_slot_id,tiebreak_slot_id,timezone,voting_deadline,location_geo FROM events WHERE public_token=$1")
         .bind(public).fetch_optional(pool).await.map_err(db)?.ok_or_else(missing)?;
-    let id: Uuid = e.get("id");
-    let slots = sqlx::query("SELECT id,slot_date,start_time,end_time FROM event_slots WHERE event_id=$1 ORDER BY slot_date")
-        .bind(id).fetch_all(pool).await.map_err(db)?.iter().map(|r| json!({"id":r.get::<Uuid,_>("id"),"date":r.get::<NaiveDate,_>("slot_date"),"start":r.get::<NaiveTime,_>("start_time"),"end":r.get::<Option<NaiveTime>,_>("end_time")})).collect::<Vec<_>>();
-    let people = sqlx::query("SELECT p.id,p.name,COALESCE(array_agg(v.slot_id) FILTER (WHERE v.slot_id IS NOT NULL), '{}') AS slots FROM participants p LEFT JOIN votes v ON v.participant_id=p.id WHERE p.event_id=$1 GROUP BY p.id ORDER BY p.created_at")
-        .bind(id).fetch_all(pool).await.map_err(db)?.iter().map(|r| json!({"name":r.get::<String,_>("name"),"slots":r.get::<Vec<Uuid>,_>("slots")})).collect::<Vec<_>>();
-    Ok(Json(
-        json!({"title":e.get::<String,_>("title"),"description":e.get::<Option<String>,_>("description"),"location":e.get::<String,_>("location"),"location_geo":e.get::<Option<sqlx::types::Json<LocationGeo>>,_>("location_geo"),"organizer_name":e.get::<String,_>("organizer_name"),"allow_multiple_choices":e.get::<bool,_>("allow_multiple_choices"),"status":e.get::<Status,_>("status"),"confirmed_slot_id":e.get::<Option<Uuid>,_>("confirmed_slot_id"),"tiebreak_slot_id":e.get::<Option<Uuid>,_>("tiebreak_slot_id"),"timezone":e.get::<String,_>("timezone"),"voting_deadline":e.get::<Option<NaiveDate>,_>("voting_deadline"),"voting_ended":deadline_passed(e.get("voting_deadline"),&e.get::<String,_>("timezone")),"slots":slots,"participants":people}),
-    ))
+    event.slots = sqlx::query_as("SELECT id,slot_date,start_time,end_time FROM event_slots WHERE event_id=$1 ORDER BY slot_date")
+        .bind(event.id).fetch_all(pool).await.map_err(db)?;
+    event.participants = sqlx::query_as("SELECT p.id,p.name,COALESCE(array_agg(v.slot_id) FILTER (WHERE v.slot_id IS NOT NULL), '{}') AS slots FROM participants p LEFT JOIN votes v ON v.participant_id=p.id WHERE p.event_id=$1 GROUP BY p.id ORDER BY p.created_at")
+        .bind(event.id).fetch_all(pool).await.map_err(db)?;
+    event.voting_ended = deadline_passed(event.voting_deadline, &event.timezone);
+    Ok(sorted_json(&event))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn sample(geo: Option<LocationGeo>, deadline: Option<NaiveDate>) -> EventView {
+        let uuid = |n: u128| Uuid::from_u128(n);
+        let time = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        EventView {
+            id: uuid(1),
+            title: "Cena <b>&</b> \"amici\" ☕".into(),
+            description: Some("Prima riga\nSeconda".into()),
+            location: "Via Roma 1, Venezia".into(),
+            location_geo: geo.map(sqlx::types::Json),
+            organizer_name: "Ada".into(),
+            allow_multiple_choices: true,
+            status: Status::Confirmed,
+            confirmed_slot_id: Some(uuid(2)),
+            tiebreak_slot_id: None,
+            timezone: "Europe/Rome".into(),
+            voting_deadline: deadline,
+            voting_ended: true,
+            slots: vec![
+                SlotView {
+                    id: uuid(2),
+                    date: NaiveDate::from_ymd_opt(2027, 1, 10).unwrap(),
+                    start: time(20, 0),
+                    end: Some(time(22, 30)),
+                },
+                SlotView {
+                    id: uuid(3),
+                    date: NaiveDate::from_ymd_opt(2027, 1, 11).unwrap(),
+                    start: time(19, 45),
+                    end: None,
+                },
+            ],
+            participants: vec![
+                ParticipantView {
+                    name: "Lucia".into(),
+                    slots: vec![uuid(2), uuid(3)],
+                },
+                ParticipantView {
+                    name: "Bob".into(),
+                    slots: vec![],
+                },
+            ],
+        }
+    }
+
+    /// The `json!` literal `get_event` built before it used `EventView`.
+    fn legacy(e: &EventView) -> Value {
+        let slots = e
+            .slots
+            .iter()
+            .map(|r| json!({"id":r.id,"date":r.date,"start":r.start,"end":r.end}))
+            .collect::<Vec<_>>();
+        let people = e
+            .participants
+            .iter()
+            .map(|r| json!({"name":r.name,"slots":r.slots}))
+            .collect::<Vec<_>>();
+        json!({"title":e.title,"description":e.description,"location":e.location,"location_geo":e.location_geo,"organizer_name":e.organizer_name,"allow_multiple_choices":e.allow_multiple_choices,"status":e.status.as_str(),"confirmed_slot_id":e.confirmed_slot_id,"tiebreak_slot_id":e.tiebreak_slot_id,"timezone":e.timezone,"voting_deadline":e.voting_deadline,"voting_ended":e.voting_ended,"slots":slots,"participants":people})
+    }
+
+    #[test]
+    fn event_view_serializes_exactly_like_the_legacy_json() {
+        let geo: LocationGeo = serde_json::from_value(json!({
+            "latitude": 45.43, "longitude": 12.33, "kind": "venue",
+            "attribution": "© OSM", "place_id": "51ab"
+        }))
+        .unwrap();
+        let deadline = NaiveDate::from_ymd_opt(2027, 1, 9);
+        for view in [sample(Some(geo), deadline), sample(None, None)] {
+            let expected = serde_json::to_vec(&legacy(&view)).unwrap();
+            let Json(actual) = sorted_json(&view);
+            assert_eq!(
+                String::from_utf8(serde_json::to_vec(&actual).unwrap()).unwrap(),
+                String::from_utf8(expected).unwrap()
+            );
+            assert!(actual.get("id").is_none());
+        }
+    }
 }

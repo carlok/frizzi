@@ -5,11 +5,12 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{FromRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
+use super::sorted_json;
 use crate::error::{bad, db, error, missing, unique_or_db, ApiError, ApiResult};
 use crate::limits::{per_ip, rate_limits, ClientIp, VOTES_PER_IP, VOTES_PER_PARTICIPANT};
 use crate::mail::{Email, MailKind};
@@ -148,16 +149,25 @@ pub(super) async fn participant(
     if !valid_token(&public) || !valid_token(&secret) {
         return Err(missing());
     }
-    let p = sqlx::query("SELECT p.id,p.name,p.email,p.locale FROM participants p JOIN events e ON e.id=p.event_id WHERE e.public_token=$1 AND p.edit_token=$2")
+    let mut answer: Answer = sqlx::query_as("SELECT p.id,p.name,p.email,p.locale FROM participants p JOIN events e ON e.id=p.event_id WHERE e.public_token=$1 AND p.edit_token=$2")
         .bind(public).bind(secret).fetch_optional(&pool).await.map_err(db)?.ok_or_else(missing)?;
-    let slots: Vec<Uuid> = sqlx::query_scalar("SELECT slot_id FROM votes WHERE participant_id=$1")
-        .bind(p.get::<Uuid, _>("id"))
+    answer.slots = sqlx::query_scalar("SELECT slot_id FROM votes WHERE participant_id=$1")
+        .bind(answer.id)
         .fetch_all(&pool)
         .await
         .map_err(db)?;
-    Ok(Json(
-        json!({"name":p.get::<String,_>("name"),"email":p.get::<String,_>("email"),"locale":p.get::<String,_>("locale"),"slots":slots}),
-    ))
+    Ok(sorted_json(&answer))
+}
+/// A participant's own answer, as their private link shows it for editing.
+#[derive(FromRow, Serialize)]
+struct Answer {
+    #[serde(skip)]
+    id: Uuid,
+    name: String,
+    email: String,
+    locale: String,
+    #[sqlx(skip)]
+    slots: Vec<Uuid>,
 }
 
 /// Whether `slot` is one of several dates sharing the most votes, so it may break the tie.
@@ -180,4 +190,29 @@ pub(super) async fn can_break_tie(
     .fetch_one(&mut **tx)
     .await
     .map_err(db)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answer_serializes_exactly_like_the_legacy_json() {
+        for slots in [vec![], vec![Uuid::from_u128(7), Uuid::from_u128(8)]] {
+            let answer = Answer {
+                id: Uuid::from_u128(1),
+                name: "Lucía \"L\" <b>".into(),
+                email: "lucia@example.test".into(),
+                locale: "es".into(),
+                slots,
+            };
+            // The `json!` literal `participant` built before it used `Answer`.
+            let legacy = json!({"name":answer.name,"email":answer.email,"locale":answer.locale,"slots":answer.slots});
+            let Json(actual) = sorted_json(&answer);
+            assert_eq!(
+                serde_json::to_string(&actual).unwrap(),
+                serde_json::to_string(&legacy).unwrap()
+            );
+        }
+    }
 }
