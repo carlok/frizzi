@@ -370,8 +370,8 @@ try{
  check(await dateInput.getAttribute('placeholder')==='GG/MM/AAAA','Italian date field spells day/month/year in Italian');
  await dateInput.fill('31/02/2030');
  check(await dateInput.evaluate(input=>!input.checkValidity()),'Localized date rejects an impossible day');
- await dateInput.blur();
- check(await dateInput.getAttribute('aria-invalid')==='true'&&await page.getByText('Inserisci una data valida nel formato indicato.').isVisible(),'An impossible date is flagged with aria-invalid and a visible message');
+ await dateInput.blur();await page.getByText('Inserisci una data valida nel formato indicato.').waitFor();
+ check(await dateInput.getAttribute('aria-invalid')==='true'&&(await dateInput.getAttribute('aria-describedby'))==='date-0-error','An impossible date is flagged with aria-invalid and a visible message');
  await dateInput.fill('31032030');
  await dateInput.blur();
  check(await dateInput.inputValue()==='31/03/2030','Compact keyboard entry is normalized to the selected date format');
