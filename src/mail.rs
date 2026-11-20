@@ -672,6 +672,10 @@ async fn deliver(
     Ok(())
 }
 pub async fn dispatch(pool: &PgPool, limit: usize) {
+    // Invitations whose PDF is still pending after a transient failure or a lease held by
+    // another worker: their other mails wait for the next run instead of rendering or waiting
+    // again now.
+    let mut pending_pdfs = std::collections::HashSet::new();
     for _ in 0..limit {
         let message = sqlx::query("UPDATE email_outbox SET locked_until=now()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM email_outbox WHERE sent_at IS NULL AND failed_at IS NULL AND available_at<=now() AND (locked_until IS NULL OR locked_until<now()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,recipient,subject,body,html,invitation_id,attempts")
             .fetch_optional(pool).await;
@@ -688,8 +692,12 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
         let start = std::time::Instant::now();
         let html: Option<String> = row.get("html");
         let invitation: Option<Uuid> = row.get("invitation_id");
+        let may_wait = attempts < MAX_ATTEMPTS;
         let pdf = match invitation {
-            Some(invitation) => invitation::attachment(pool, invitation).await,
+            Some(invitation) if may_wait && pending_pdfs.contains(&invitation) => {
+                Err(invitation::AttachmentError::RenderInProgress)
+            }
+            Some(invitation) => invitation::attachment(pool, invitation, may_wait).await,
             None => Ok(None),
         };
         let result = match pdf {
@@ -703,6 +711,10 @@ pub async fn dispatch(pool: &PgPool, limit: usize) {
                     pdf,
                 )
                 .await
+            }
+            Err(error) if error.is_render_pending() => {
+                pending_pdfs.extend(invitation);
+                Err(error.reason().into())
             }
             Err(error) => {
                 tracing::error!(event = "invitation_load_failed", mail_id = %id, reason = error.reason());
