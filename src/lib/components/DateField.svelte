@@ -31,7 +31,17 @@
  $: input?.setCustomValidity(invalid ? $t.invalidDate : '');
  // The error shows once the person leaves the field or submits, not while typing.
  let touched = false;
+ let pressed = false;
  $: showError = invalid && touched;
+ // The message pushes the content below it down. Revealing it while the pointer that caused the
+ // blur is still pressed would move the target (e.g. Add a date) away and lose the click, so it
+ // waits for the release and for the click that follows it.
+ function reveal() {
+   if (!pressed) return void setTimeout(() => touched = true);
+   const later = () => setTimeout(() => touched = true);
+   addEventListener('pointerup', later, { once: true });
+   addEventListener('pointercancel', later, { once: true });
+ }
  $: describedByIds = [describedBy, showError ? `${name}-error` : ''].filter(Boolean).join(' ') || undefined;
 
  function setDraft(raw: string) {
@@ -54,13 +64,15 @@
  }
 </script>
 
+<svelte:window on:pointerdown|capture={() => pressed = true} on:pointerup|capture={() => pressed = false} on:pointercancel|capture={() => pressed = false}/>
+
 <label for={name}>{label}{required ? ' *' : ''}</label>
 <div class="date-entry">
  <input id={name} {name} type="text" inputmode="numeric" autocomplete="off"
   {required} {placeholder} aria-describedby={describedByIds} aria-invalid={showError || conflict} bind:this={input} value={draft}
   on:input={(event) => setDraft(event.currentTarget.value)}
   on:invalid={() => touched = true}
-  on:blur={() => { touched = true; if (value) usePicker(value); }}/>
+  on:blur={() => { reveal(); if (value) usePicker(value); }}/>
  <button type="button" class="date-picker-button" aria-label={`${$t.openDatePicker}: ${label}`} on:click={showCalendar}>
   <CalendarDays size={17} aria-hidden="true"/>
  </button>

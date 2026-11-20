@@ -341,6 +341,8 @@ try{
  await unavailable.close();
  await page.goto(web);await page.waitForSelector('header[data-ready="true"]');await page.waitForSelector('input[name="title"]');
  const select=page.locator('header select');
+ // Dictionaries other than Italian load on demand: wait until the page has switched.
+ const chooseLanguage=async code=>{await select.selectOption(code);await page.waitForFunction(code=>document.documentElement.lang===code,code);};
  for(const locale of locales){
    const dictionary=JSON.parse(await readFile(`locales/${locale}.json`,'utf8'));
    await select.selectOption(locale);
@@ -349,7 +351,7 @@ try{
  }
  await select.selectOption('ar');await page.reload();await page.waitForFunction(()=>document.documentElement.dir==='rtl');
  check(await select.inputValue()==='ar','Language persists after reload');
- await select.selectOption('it');
+ await chooseLanguage('it');
  const venue={label:'Caffè Florian, Piazza San Marco 57, Venezia',geo:{
   latitude:45.4336,longitude:12.33828,kind:'venue',attribution:'© OpenStreetMap contributors'
  }};
@@ -373,16 +375,16 @@ try{
  check(await dateInput.getAttribute('placeholder')==='GG/MM/AAAA','Italian date field spells day/month/year in Italian');
  await dateInput.fill('31/02/2030');
  check(await dateInput.evaluate(input=>!input.checkValidity()),'Localized date rejects an impossible day');
- await dateInput.blur();
- check(await dateInput.getAttribute('aria-invalid')==='true'&&await page.getByText('Inserisci una data valida nel formato indicato.').isVisible(),'An impossible date is flagged with aria-invalid and a visible message');
+ await dateInput.blur();await page.getByText('Inserisci una data valida nel formato indicato.').waitFor();
+ check(await dateInput.getAttribute('aria-invalid')==='true'&&(await dateInput.getAttribute('aria-describedby'))==='date-0-error','An impossible date is flagged with aria-invalid and a visible message');
  await dateInput.fill('31032030');
  await dateInput.blur();
  check(await dateInput.inputValue()==='31/03/2030','Compact keyboard entry is normalized to the selected date format');
- await select.selectOption('de');
+ await chooseLanguage('de');
  check(await dateInput.inputValue()==='31.03.2030','Date field follows German formatting');
- await select.selectOption('zh');
+ await chooseLanguage('zh');
  check(await dateInput.inputValue()==='2030/03/31','Date field follows Chinese date order');
- await select.selectOption('it');
+ await chooseLanguage('it');
  check((await page.locator('[name="start-0-minute"] option').allTextContents()).join(',')==='—,00,05,10,15,20,25,30,35,40,45,50,55','Minutes are offered in five-minute steps');
  await page.locator('[name="start-0-hour"]').selectOption('19');
  await page.locator('[name="start-0-minute"]').selectOption('30');
@@ -463,9 +465,9 @@ try{
  const deadlineBanner=page.locator('.vote-deadline');
  check(await deadlineBanner.locator('time').getAttribute('datetime')==='2030-02-25','Voting deadline is prominently displayed with the correct date');
  check((await deadlineBanner.locator('time').textContent())==='lun 25 feb 2030','Public deadline spells out the month in the active language');
- await select.selectOption('de');
+ await chooseLanguage('de');
  check((await deadlineBanner.locator('time').textContent())==='Mo., 25. Feb. 2030','Public deadline updates when the language changes');
- await select.selectOption('it');
+ await chooseLanguage('it');
  const leaders=page.locator('.result-leaders');
  check(await leaders.count()===0,'No leading date before a vote');
  const traveller=await browser.newPage({locale:'it-IT',timezoneId:'America/New_York'});
@@ -483,7 +485,7 @@ try{
  await checkboxes.last().check();
  await aprilDay.waitFor();
  check(await aprilDay.getAttribute('aria-pressed')==='true','Checkbox selects and reveals a date in another month');
- check(await page.locator('.event-calendar').getAttribute('aria-hidden')==='true'&&await marchDay.getAttribute('tabindex')==='-1','The calendar mirrors the date list for pointer users only');
+ check(await page.locator('.event-calendar').getAttribute('aria-hidden')==='true'&&await aprilDay.getAttribute('tabindex')==='-1','The calendar mirrors the date list for pointer users only');
  await page.locator('.calendar-month button[aria-label="Mese precedente"]').click();
  check(await marchDay.getAttribute('aria-pressed')==='true','Selections survive month navigation');
  await checkboxes.last().uncheck();
@@ -573,6 +575,7 @@ try{
  await page.getByText('Voto decisivo dell’organizzatore',{exact:true}).waitFor();
  check(await page.getByRole('button',{name:/spareggio/i}).count()===0,'Participants see the deciding vote without organizer controls');
  await page.goto(`${publicUrl}/admin/${browserAdmin}`);
+ await page.getByRole('button',{name:/^Conferma questa data · /}).first().waitFor();
  check(new Set(await page.getByRole('button',{name:/^Conferma questa data · /}).evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')))).size===2,'Each confirm button names its date');
  const confirmDate=page.getByRole('button',{name:/^Conferma questa data · /}).first();
  const confirmDialog=page.getByRole('dialog',{name:'Confermare questa data?'});
