@@ -1,6 +1,7 @@
 <script lang="ts">
  import { CalendarDays } from '@lucide/svelte';
  import { dateFormatter, lang, t } from '#lib/i18n.ts';
+ import { dateOrder, readDate } from '#lib/dates.ts';
 
  export let name: string;
  export let label: string;
@@ -9,8 +10,6 @@
  export let describedBy: string | undefined = undefined;
 
  const example = new Date('2031-04-27T12:00:00Z');
- const fieldSizes = { day: 2, month: 2, year: 4 };
- type DatePart = keyof typeof fieldSizes;
  let input: HTMLInputElement;
  let picker: HTMLInputElement;
  let draft = '';
@@ -19,8 +18,7 @@
 
  $: formatter = dateFormatter($lang);
  $: dateParts = formatter.formatToParts(example);
- $: order = dateParts.filter((part): part is Intl.DateTimeFormatPart & {type: DatePart} =>
-   part.type === 'day' || part.type === 'month' || part.type === 'year').map(part => part.type);
+ $: order = dateOrder(dateParts);
  $: placeholder = dateParts.map(part => {
    if (part.type === 'day') return 'DD';
    if (part.type === 'month') return 'MM';
@@ -34,40 +32,14 @@
  }
  $: input?.setCustomValidity(draft.trim() && !value ? $t.invalidDate : '');
 
- function readDate(raw: string) {
-   const normalized = raw.trim().replace(/[\u200e\u200f\u061c]/g, '').replace(/[٠-٩۰-۹০-৯०-९]/g, digit => {
-     const start = ['٠','۰','০','०'].find(zero => digit >= zero && digit <= String.fromCharCode(zero.charCodeAt(0) + 9))!;
-     return String(digit.charCodeAt(0) - start.charCodeAt(0));
-   });
-   let iso = normalized;
-   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-     let offset = 0;
-     const parts = /^\d{8}$/.test(normalized)
-       ? order.map(part => {
-           const partValue = normalized.slice(offset, offset + fieldSizes[part]);
-           offset += fieldSizes[part];
-           return partValue;
-         })
-       : normalized.split(/[\/\.\s-]/);
-     if (parts.length !== 3 || parts.some((part, i) =>
-       !/^\d+$/.test(part) || (order[i] === 'year' ? part.length !== 4 : part.length > 2))) return '';
-     const [year, month, day] = (['year','month','day'] as const).map(part =>
-       parts[order.indexOf(part)].padStart(fieldSizes[part], '0'));
-     iso = `${year}-${month}-${day}`;
-   }
-   if (iso.startsWith('0000-')) return '';
-   const date = new Date(`${iso}T12:00:00Z`);
-   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === iso ? iso : '';
- }
-
  function setDraft(raw: string) {
    draft = raw;
-   syncedValue = readDate(raw);
+   syncedValue = readDate(raw, order);
    value = syncedValue;
  }
 
  function usePicker(iso: string) {
-   syncedValue = readDate(iso);
+   syncedValue = readDate(iso, order);
    value = syncedValue;
    draft = value ? formatter.format(new Date(`${value}T12:00:00Z`)) : '';
  }

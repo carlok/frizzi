@@ -5,6 +5,7 @@
  import { ArrowUpRight, Check, CircleCheck, CircleX, Copy, LockKeyhole, MapPin, Clock, Navigation, Users, Share2, CalendarDays, CalendarClock, PartyPopper, Star, Vote } from '@lucide/svelte';
  import { lang, t, errorText, formatDate, formatTime } from '#lib/i18n.ts';
  import { track } from '#lib/telemetry.ts';
+ import * as poll from '#lib/poll.ts';
  import LocationAttribution from '#lib/components/LocationAttribution.svelte';
  import EventCalendar from '#lib/components/EventCalendar.svelte';
  import EventFields from '#lib/components/EventFields.svelte';
@@ -216,13 +217,6 @@
    try{await navigator.clipboard.writeText(publicLink());track('share_copy');copied=true;setTimeout(()=>copied=false,2000);}
    catch{track('browser_clipboard');errorCode='error';}
  }
- function countsFor(data:EventData|null){
-   const counts=new Map<string,number>();
-   for(const participant of data?.participants||[]){
-     for(const id of participant.slots) counts.set(id,(counts.get(id)||0)+1);
-   }
-   return counts;
- }
  function webLocation(text:string){
    try {
      const url=new URL(text);
@@ -231,19 +225,14 @@
    return null;
  }
  $: locationLink=event && !event.location_geo ? webLocation(event.location) : null;
- $: confirmed=event?.slots.find(s=>s.id===event?.confirmed_slot_id);
- $: voteCounts=countsFor(event);
- $: maxVotes=Math.max(0,...voteCounts.values());
- $: tiedLeaders=event?.status==='OPEN' && maxVotes>0
-   ? event.slots.filter(slot=>voteCounts.get(slot.id)===maxVotes)
-   : [];
- $: decisiveSlot=event?.status==='CONFIRMED'
-   ? (confirmed?.id===event.tiebreak_slot_id ? confirmed : undefined)
-   : tiedLeaders.length>1 ? tiedLeaders.find(slot=>slot.id===event?.tiebreak_slot_id) : undefined;
- $: leadingSlots=decisiveSlot && event?.status==='OPEN' ? [decisiveSlot] : tiedLeaders;
+ $: confirmed=poll.confirmedSlot(event);
+ $: voteCounts=poll.countsFor(event);
+ $: maxVotes=poll.maxVotes(voteCounts);
+ $: tiedLeaders=poll.tiedLeaders(event,voteCounts);
+ $: decisiveSlot=poll.decisiveSlot(event,tiedLeaders);
+ $: leadingSlots=poll.leadingSlots(event,tiedLeaders,decisiveSlot);
  $: numbers=new Intl.NumberFormat($lang||'it');
- $: pollState=event?.status==='CONFIRMED' ? 'confirmed' : event?.status==='CANCELLED'
-   ? 'cancelled' : event?.voting_ended ? 'closed' : 'open';
+ $: pollState=poll.pollState(event);
 </script>
 
 {#if mode==='create'}
