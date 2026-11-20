@@ -349,8 +349,9 @@ try{
    await page.getByRole('heading',{name:dictionary.ui.create,exact:true}).waitFor();
    check(await page.locator('html').getAttribute('dir')===(locale==='ar'?'rtl':'ltr'),`Direction for ${locale}`);
  }
- await select.selectOption('ar');await page.reload();await page.waitForFunction(()=>document.documentElement.dir==='rtl');
- check(await select.inputValue()==='ar','Language persists after reload');
+ await select.selectOption('ar');await page.reload();await page.waitForSelector('header[data-ready="true"]');
+ // lang/dir are set before first paint; the picker follows once the Arabic dictionary has loaded.
+ check(await page.waitForFunction(()=>document.querySelector('header select')?.value==='ar').then(()=>true,()=>false)&&await page.locator('html').getAttribute('dir')==='rtl','Language persists after reload');
  await chooseLanguage('it');
  const venue={label:'Caffè Florian, Piazza San Marco 57, Venezia',geo:{
   latitude:45.4336,longitude:12.33828,kind:'venue',attribution:'© OpenStreetMap contributors'
