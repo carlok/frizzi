@@ -1,7 +1,7 @@
 use crate::observability::{db_class, upstream_class};
 use crate::{db, locale, places::LocationGeo, ApiError, SlotInput};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use chrono::{Locale, NaiveDate};
+use chrono::{Locale, NaiveDate, NaiveTime};
 use lettre::message::{header::ContentType, Attachment, MultiPart, SinglePart};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use sqlx::types::Json;
@@ -166,7 +166,13 @@ fn numeric_date(date: NaiveDate, lang: &str) -> String {
         "zh" => "%Y/%m/%d",
         _ => "%d/%m/%Y",
     };
-    let text = date.format(pattern).to_string();
+    native_digits(date.format(pattern).to_string(), lang)
+}
+/// 24-hour `HH:MM`: `%X` would add seconds (and a 12-hour clock with a "UTC" suffix for hi/bn).
+fn clock_time(time: NaiveTime, lang: &str) -> String {
+    native_digits(time.format("%H:%M").to_string(), lang)
+}
+fn native_digits(text: String, lang: &str) -> String {
     let zero = match lang {
         "ar" => '٠',
         "bn" => '০',
@@ -189,16 +195,10 @@ fn format_slots(slots: &[SlotInput], lang: &str) -> String {
                 "{} · {} · {}",
                 s.date.format_localized("%A", loc),
                 numeric_date(s.date, lang),
-                s.date
-                    .and_time(s.start)
-                    .and_utc()
-                    .format_localized("%X", loc)
+                clock_time(s.start, lang)
             );
             if let Some(end) = s.end {
-                text.push_str(&format!(
-                    " – {}",
-                    s.date.and_time(end).and_utc().format_localized("%X", loc)
-                ));
+                text.push_str(&format!(" – {}", clock_time(end, lang)));
             }
             text
         })
@@ -807,6 +807,28 @@ mod tests {
             assert_eq!(query["destination"], expected);
             assert_eq!(query["api"], "1");
             assert_eq!(query.len(), 2);
+        }
+    }
+
+    #[test]
+    fn slot_times_are_hours_and_minutes_in_every_locale() {
+        let slot = SlotInput {
+            id: None,
+            date: NaiveDate::from_ymd_opt(2030, 2, 3).unwrap(),
+            start: NaiveTime::from_hms_opt(20, 5, 0).unwrap(),
+            end: Some(NaiveTime::from_hms_opt(22, 30, 0).unwrap()),
+        };
+        for (lang, expected) in [
+            ("it", "20:05 – 22:30"),
+            ("en", "20:05 – 22:30"),
+            ("de", "20:05 – 22:30"),
+            ("zh", "20:05 – 22:30"),
+            ("hi", "20:05 – 22:30"),
+            ("ar", "٢٠:٠٥ – ٢٢:٣٠"),
+            ("bn", "২০:০৫ – ২২:৩০"),
+        ] {
+            let text = format_slots(std::slice::from_ref(&slot), lang);
+            assert!(text.ends_with(&format!(" · {expected}")), "{lang}: {text}");
         }
     }
 }
