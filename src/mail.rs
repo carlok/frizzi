@@ -13,7 +13,9 @@ use std::{collections::HashMap, sync::LazyLock, time::Duration};
 use uuid::Uuid;
 
 mod invitation;
+mod kind;
 mod template;
+pub use kind::MailKind;
 use template::Details;
 
 static GEMINI: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
@@ -272,22 +274,22 @@ struct Composed {
 
 fn compose(
     lang: &str,
-    kind: &str,
+    kind: MailKind,
     title: &str,
     url: &str,
     details: Option<&Details>,
     intro: Option<&str>,
 ) -> Composed {
-    let subject_key = format!("mail.{kind}Subject");
-    let body_key = format!("mail.{kind}Body");
+    let subject_key = format!("mail.{}Subject", kind.as_str());
+    let body_key = format!("mail.{}Body", kind.as_str());
     let headline = rust_i18n::t!(&subject_key, locale = lang);
     let icon = match kind {
-        "confirmed" => "🎉",
-        "cancelled" => "📌",
-        "open" => "🗳️",
-        "changed" => "📣",
-        "vote" => "✅",
-        _ => "🔑",
+        MailKind::Confirmed => "🎉",
+        MailKind::Cancelled => "📌",
+        MailKind::Open => "🗳️",
+        MailKind::Changed => "📣",
+        MailKind::Vote => "✅",
+        MailKind::Admin | MailKind::Recover | MailKind::Message => "🔑",
     };
     let default_intro = rust_i18n::t!(&body_key, locale = lang);
     let intro = intro.unwrap_or(&default_intro);
@@ -303,7 +305,7 @@ pub async fn enqueue(
     event: Uuid,
     to: &str,
     lang: &str,
-    kind: &str,
+    kind: MailKind,
     title: &str,
     url: &str,
     details: Option<&Details>,
@@ -327,7 +329,7 @@ pub async fn enqueue(
     .fetch_one(&mut **tx)
     .await
     .map_err(db)?;
-    tracing::info!(event = "email_prepared", mail_id = %id, kind);
+    tracing::info!(event = "email_prepared", mail_id = %id, kind = kind.as_str());
     Ok(())
 }
 
@@ -354,8 +356,8 @@ pub async fn enqueue_participant_message(
         serde_json::json!({
             "locale": original,
             "subject": format!("💌 {headline} · {clean_title}"),
-            "body": template::plain(lang, "message", &headline, title, &intro, &url, None, Some(&message)),
-            "html": template::html(lang, "message", &headline, title, &intro, &url, None, Some(&message)),
+            "body": template::plain(lang, MailKind::Message, &headline, title, &intro, &url, None, Some(&message)),
+            "html": template::html(lang, MailKind::Message, &headline, title, &intro, &url, None, Some(&message)),
         })
     }).collect();
     let result = sqlx::query(
@@ -395,7 +397,7 @@ fn recipients(mut participants: Vec<Recipient>, mut organizer: Recipient) -> Vec
 pub async fn notify(
     tx: &mut Transaction<'_, Postgres>,
     event: Uuid,
-    kind: &str,
+    kind: MailKind,
     changes: Changes<'_>,
     confirmation: Option<&ConfirmationExtras>,
 ) -> Result<(), ApiError> {
@@ -437,12 +439,6 @@ pub async fn notify(
         ),
         response: None,
     };
-    let kind = match kind {
-        "CONFIRMED" => "confirmed",
-        "CANCELLED" => "cancelled",
-        "OPEN" => "open",
-        _ => "changed",
-    };
     let title: String = e.get("title");
     let organizer: String = e.get("organizer_name");
     let recipients = recipients(participants, organizer_recipient);
@@ -457,7 +453,7 @@ pub async fn notify(
             .map(String::as_str);
         if !languages.contains_key(lang) {
             let mut details = summary(tx, event, lang).await?;
-            let invitation_id = if kind == "confirmed" {
+            let invitation_id = if kind == MailKind::Confirmed {
                 details.website = website.cloned();
                 details.calendar = Some(format!("{}/api/events/{public}/calendar.ics", base_url()));
                 invitation::enqueue(tx, event, lang, &title, &organizer, intro, &details).await?
@@ -500,7 +496,7 @@ pub async fn notify(
     .await
     .map_err(db)?;
     for id in ids {
-        tracing::info!(event = "email_prepared", mail_id = %id, kind);
+        tracing::info!(event = "email_prepared", mail_id = %id, kind = kind.as_str());
     }
     Ok(())
 }
@@ -969,7 +965,7 @@ mod tests {
     fn composed_subject_has_icon_and_single_line_title() {
         let message = compose(
             "en",
-            "changed",
+            MailKind::Changed,
             "Dinner\r\nparty",
             "https://x.test/a",
             None,

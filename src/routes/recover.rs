@@ -15,6 +15,7 @@ use crate::limits::{
     per_ip, rate_limit, rate_limits, ClientIp, RECOVERY_PER_EMAIL, RECOVERY_PER_EVENT,
     RECOVERY_PER_IP,
 };
+use crate::mail::MailKind;
 use crate::validate::{email, locale, valid_token};
 use crate::{mail, schedule_mail, Runtime};
 
@@ -82,7 +83,7 @@ pub(super) async fn recover_links(
             event_id,
             &address,
             locale(&row.get::<String, _>("locale")),
-            "recover",
+            MailKind::Recover,
             &row.get::<String, _>("title"),
             &url,
             None,

@@ -1,4 +1,6 @@
 use reqwest::Url;
+
+use super::MailKind;
 use std::fmt::Write;
 
 pub(super) struct MessageText {
@@ -83,7 +85,7 @@ impl Details {
 
 pub fn plain(
     lang: &str,
-    kind: &str,
+    kind: MailKind,
     headline: &str,
     title: &str,
     intro: &str,
@@ -92,7 +94,7 @@ pub fn plain(
     message: Option<&MessageText>,
 ) -> String {
     let mut body = String::new();
-    if kind == "confirmed" {
+    if kind == MailKind::Confirmed {
         let _ = writeln!(body, "{headline}");
     }
     let _ = write!(body, "{intro}\n\n{title}\n\n{url}\n");
@@ -244,7 +246,7 @@ fn facts(lang: &str, d: &Details) -> String {
 
 pub fn html(
     lang: &str,
-    kind: &str,
+    kind: MailKind,
     headline: &str,
     title: &str,
     intro: &str,
@@ -253,17 +255,22 @@ pub fn html(
     message: Option<&MessageText>,
 ) -> String {
     let (banner, accent, icon) = match kind {
-        "confirmed" => ("#d9f59d", "#fff0b2", "🎉"),
-        "cancelled" => ("#f7e2e1", "#f7e2e1", ""),
-        "changed" | "open" => ("#ffefae", "#ffd2bc", "✦"),
-        "vote" => ("#e9dfff", "#d9f59d", "✓"),
-        "message" => ("#e9dfff", "#ffd2bc", "💌"),
-        _ => ("#dcefd4", "#ffeaaf", "✦"),
+        MailKind::Confirmed => ("#d9f59d", "#fff0b2", "🎉"),
+        MailKind::Cancelled => ("#f7e2e1", "#f7e2e1", ""),
+        MailKind::Changed | MailKind::Open => ("#ffefae", "#ffd2bc", "✦"),
+        MailKind::Vote => ("#e9dfff", "#d9f59d", "✓"),
+        MailKind::Message => ("#e9dfff", "#ffd2bc", "💌"),
+        MailKind::Admin | MailKind::Recover => ("#dcefd4", "#ffeaaf", "✦"),
     };
     let action = match kind {
-        "admin" => "mail.manageEvent",
-        "vote" => "ui.edit",
-        _ => "mail.openEvent",
+        MailKind::Admin => "mail.manageEvent",
+        MailKind::Vote => "ui.edit",
+        MailKind::Recover
+        | MailKind::Message
+        | MailKind::Open
+        | MailKind::Confirmed
+        | MailKind::Cancelled
+        | MailKind::Changed => "mail.openEvent",
     };
     let (direction, align) = if lang == "ar" {
         ("rtl", "right")
@@ -424,7 +431,7 @@ mod tests {
         let message = MessageText::parse(&format!("<b>Hey</b> {script}")).unwrap();
         let page = html(
             "en",
-            "message",
+            MailKind::Message,
             &format!("Head {script}"),
             &format!("Title {script}"),
             "Intro \"quoted\"",
@@ -444,7 +451,7 @@ mod tests {
 
         let text = plain(
             "en",
-            "message",
+            MailKind::Message,
             "Head",
             "Title",
             "Intro",

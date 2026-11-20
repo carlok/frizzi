@@ -13,8 +13,10 @@ use uuid::Uuid;
 
 use crate::error::{bad, db, error, missing, ApiResult};
 use crate::limits::{per_ip, rate_limits, ClientIp, CREATE_PER_IP, CREATE_PER_ORGANIZER};
+use crate::mail::MailKind;
 use crate::places::LocationGeo;
 use crate::slots::{insert_slots, SlotInput};
+use crate::status::Status;
 use crate::validate::{
     clean_description, deadline_passed, deadline_within_slots, default_locale, email, locale,
     require_database_timezone, valid_token, validate_deadline, validate_details,
@@ -86,7 +88,7 @@ pub(super) async fn create(
         id,
         &organizer_email,
         locale(&e.locale),
-        "admin",
+        MailKind::Admin,
         &e.title,
         &format!("{}/{public}/admin/{secret}", mail::base_url()),
         None,
@@ -116,6 +118,6 @@ pub(super) async fn get_event(pool: &PgPool, public: &str) -> ApiResult {
     let people = sqlx::query("SELECT p.id,p.name,COALESCE(array_agg(v.slot_id) FILTER (WHERE v.slot_id IS NOT NULL), '{}') AS slots FROM participants p LEFT JOIN votes v ON v.participant_id=p.id WHERE p.event_id=$1 GROUP BY p.id ORDER BY p.created_at")
         .bind(id).fetch_all(pool).await.map_err(db)?.iter().map(|r| json!({"name":r.get::<String,_>("name"),"slots":r.get::<Vec<Uuid>,_>("slots")})).collect::<Vec<_>>();
     Ok(Json(
-        json!({"title":e.get::<String,_>("title"),"description":e.get::<Option<String>,_>("description"),"location":e.get::<String,_>("location"),"location_geo":e.get::<Option<sqlx::types::Json<LocationGeo>>,_>("location_geo"),"organizer_name":e.get::<String,_>("organizer_name"),"allow_multiple_choices":e.get::<bool,_>("allow_multiple_choices"),"status":e.get::<String,_>("status"),"confirmed_slot_id":e.get::<Option<Uuid>,_>("confirmed_slot_id"),"tiebreak_slot_id":e.get::<Option<Uuid>,_>("tiebreak_slot_id"),"timezone":e.get::<String,_>("timezone"),"voting_deadline":e.get::<Option<NaiveDate>,_>("voting_deadline"),"voting_ended":deadline_passed(e.get("voting_deadline"),&e.get::<String,_>("timezone")),"slots":slots,"participants":people}),
+        json!({"title":e.get::<String,_>("title"),"description":e.get::<Option<String>,_>("description"),"location":e.get::<String,_>("location"),"location_geo":e.get::<Option<sqlx::types::Json<LocationGeo>>,_>("location_geo"),"organizer_name":e.get::<String,_>("organizer_name"),"allow_multiple_choices":e.get::<bool,_>("allow_multiple_choices"),"status":e.get::<Status,_>("status"),"confirmed_slot_id":e.get::<Option<Uuid>,_>("confirmed_slot_id"),"tiebreak_slot_id":e.get::<Option<Uuid>,_>("tiebreak_slot_id"),"timezone":e.get::<String,_>("timezone"),"voting_deadline":e.get::<Option<NaiveDate>,_>("voting_deadline"),"voting_ended":deadline_passed(e.get("voting_deadline"),&e.get::<String,_>("timezone")),"slots":slots,"participants":people}),
     ))
 }

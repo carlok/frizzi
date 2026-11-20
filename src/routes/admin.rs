@@ -20,8 +20,10 @@ use crate::limits::{
     limit_notifications, per_ip, rate_limit, rate_limits, ClientIp, DETAILS_WRITES_PER_EVENT,
     MESSAGES_PER_EVENT, MESSAGES_PER_IP, STATUS_WRITES_PER_EVENT,
 };
+use crate::mail::MailKind;
 use crate::places::LocationGeo;
 use crate::slots::{insert_slots, SlotInput};
+use crate::status::Status;
 use crate::validate::{
     clean_description, deadline_within_slots, default_locale, locale, require_database_timezone,
     valid_multiline, valid_token, validate_deadline, validate_details, validate_slot_dates,
@@ -61,13 +63,9 @@ pub(super) async fn update_status(
     Path((public, secret)): Path<(String, String)>,
     Json(v): Json<StatusInput>,
 ) -> Result<Response, ApiError> {
-    let outcome = match v.status.as_str() {
-        "OPEN" => "reopened",
-        "CONFIRMED" => "confirmed",
-        "CANCELLED" => "cancelled",
-        _ => return Err(bad()),
-    };
-    if (v.status == "CONFIRMED") != v.confirmed_slot_id.is_some() {
+    // Parsed here rather than by serde so an unknown status stays a 400 invalid_input.
+    let status = Status::parse(&v.status).ok_or_else(bad)?;
+    if (status == Status::Confirmed) != v.confirmed_slot_id.is_some() {
         return Err(bad());
     }
     let event = authorize_admin(&pool, &public, &secret).await?;
@@ -93,7 +91,7 @@ pub(super) async fn update_status(
             return Err(bad());
         }
     }
-    let changed = e.get::<String, _>("status") != v.status
+    let changed = e.get::<Status, _>("status") != status
         || e.get::<Option<Uuid>, _>("confirmed_slot_id") != v.confirmed_slot_id;
     if changed {
         limit_notifications(&mut tx, id).await?;
@@ -101,16 +99,18 @@ pub(super) async fn update_status(
     sqlx::query("UPDATE events SET status=$1::event_status,confirmed_slot_id=$2,organizer_locale=$3,updated_at=now(),
        tiebreak_slot_id=CASE WHEN ($1='CONFIRMED' AND tiebreak_slot_id=$2) OR ($1='OPEN' AND status='OPEN')
                            THEN tiebreak_slot_id ELSE NULL END WHERE id=$4")
-        .bind(&v.status).bind(v.confirmed_slot_id).bind(locale(&v.locale)).bind(id).execute(&mut *tx).await.map_err(db)?;
+        .bind(status).bind(v.confirmed_slot_id).bind(locale(&v.locale)).bind(id).execute(&mut *tx).await.map_err(db)?;
     if changed {
-        mail::notify(&mut tx, id, &v.status, None, confirmation.as_ref()).await?;
+        mail::notify(&mut tx, id, status.into(), None, confirmation.as_ref()).await?;
     }
     tx.commit().await.map_err(db)?;
     schedule_mail(pool, runtime);
     let mut response = Json(json!({"ok": true})).into_response();
-    response
-        .extensions_mut()
-        .insert(if changed { outcome } else { "unchanged" });
+    response.extensions_mut().insert(if changed {
+        status.outcome()
+    } else {
+        "unchanged"
+    });
     Ok(response)
 }
 
@@ -137,7 +137,7 @@ pub(super) async fn update_tiebreak(
     .map_err(db)?
     .ok_or_else(missing)?;
     let id = event.get("id");
-    if event.get::<String, _>("status") != "OPEN" {
+    if event.get::<Status, _>("status") != Status::Open {
         return Err(error(StatusCode::CONFLICT, "event_closed"));
     }
     if let Some(slot) = input.slot_id {
@@ -442,7 +442,7 @@ pub(super) async fn update_details(
         mail::notify(
             &mut tx,
             id,
-            "changed",
+            MailKind::Changed,
             Some((&changes, &old_slots, dates_changed)),
             None,
         )

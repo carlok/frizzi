@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 use crate::error::{bad, db, error, missing, unique_or_db, ApiError, ApiResult};
 use crate::limits::{per_ip, rate_limits, ClientIp, VOTES_PER_IP, VOTES_PER_PARTICIPANT};
+use crate::mail::MailKind;
+use crate::status::Status;
 use crate::validate::{deadline_passed, default_locale, email, locale, valid, valid_token};
 use crate::{mail, schedule_mail, Runtime};
 
@@ -71,7 +73,7 @@ async fn save_vote(
     let event = sqlx::query("SELECT id,title,allow_multiple_choices,status::text,timezone,voting_deadline,tiebreak_slot_id FROM events WHERE public_token=$1 FOR UPDATE")
         .bind(public).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(missing)?;
     let id: Uuid = event.get("id");
-    if event.get::<String, _>("status") != "OPEN" {
+    if event.get::<Status, _>("status") != Status::Open {
         return Err(error(StatusCode::CONFLICT, "event_closed"));
     }
     if deadline_passed(
@@ -133,7 +135,7 @@ async fn save_vote(
         id,
         &email,
         locale(&v.locale),
-        "vote",
+        MailKind::Vote,
         &event.get::<String, _>("title"),
         &format!("{}/{public}/{edit_token}", mail::base_url()),
         Some(&summary),

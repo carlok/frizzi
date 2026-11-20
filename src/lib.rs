@@ -7,6 +7,7 @@ mod places;
 mod retention;
 mod routes;
 mod slots;
+mod status;
 mod validate;
 pub use observability::{init_tracing, monitor_public_urls};
 pub use routes::router;
