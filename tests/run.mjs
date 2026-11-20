@@ -338,6 +338,8 @@ try{
  await unavailable.close();
  await page.goto(web);await page.waitForSelector('header[data-ready="true"]');await page.waitForSelector('input[name="title"]');
  const select=page.locator('header select');
+ // Dictionaries other than Italian load on demand: wait until the page has switched.
+ const chooseLanguage=async code=>{await select.selectOption(code);await page.waitForFunction(code=>document.documentElement.lang===code,code);};
  for(const locale of locales){
    const dictionary=JSON.parse(await readFile(`locales/${locale}.json`,'utf8'));
    await select.selectOption(locale);
@@ -346,7 +348,7 @@ try{
  }
  await select.selectOption('ar');await page.reload();await page.waitForFunction(()=>document.documentElement.dir==='rtl');
  check(await select.inputValue()==='ar','Language persists after reload');
- await select.selectOption('it');
+ await chooseLanguage('it');
  const venue={label:'Caffè Florian, Piazza San Marco 57, Venezia',geo:{
   latitude:45.4336,longitude:12.33828,kind:'venue',attribution:'© OpenStreetMap contributors'
  }};
@@ -375,11 +377,11 @@ try{
  await dateInput.fill('31032030');
  await dateInput.blur();
  check(await dateInput.inputValue()==='31/03/2030','Compact keyboard entry is normalized to the selected date format');
- await select.selectOption('de');
+ await chooseLanguage('de');
  check(await dateInput.inputValue()==='31.03.2030','Date field follows German formatting');
- await select.selectOption('zh');
+ await chooseLanguage('zh');
  check(await dateInput.inputValue()==='2030/03/31','Date field follows Chinese date order');
- await select.selectOption('it');
+ await chooseLanguage('it');
  await page.locator('[name="start-0-hour"]').selectOption('19');
  await page.locator('[name="start-0-minute"]').selectOption('30');
  await page.locator('[name="end-0-hour"]').selectOption('22');
@@ -450,9 +452,9 @@ try{
  const deadlineBanner=page.locator('.vote-deadline');
  check(await deadlineBanner.locator('time').getAttribute('datetime')==='2030-02-25','Voting deadline is prominently displayed with the correct date');
  check((await deadlineBanner.locator('time').textContent()).includes('25/02/2030'),'Public deadline uses the active language’s date format');
- await select.selectOption('de');
+ await chooseLanguage('de');
  check((await deadlineBanner.locator('time').textContent()).includes('25.02.2030'),'Public deadline updates when the language changes');
- await select.selectOption('it');
+ await chooseLanguage('it');
  const leaders=page.locator('.result-leaders');
  check(await leaders.count()===0,'No leading date before a vote');
  const marchDay=page.locator('button[data-calendar-date="2030-03-31"]');
