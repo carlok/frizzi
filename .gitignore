@@ -1,0 +1,30 @@
+# Credenziali e dati locali
+.env
+.env.*
+!/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+*.dump
+*.sqlite*
+*.db
+/.local/
+
+# Dipendenze, build e risultati dei test
+/node_modules/
+/.svelte-kit/
+/.vercel/
+/target/
+/coverage/
+/test-results/
+/playwright-report/
+
+/build/
+/build-domain/
+
+# Note originali e configurazione specifica del server
+/requirements.md
+/deploy/*
+!/deploy/setup-invitation-pdf.py

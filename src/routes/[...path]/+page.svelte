@@ -1,0 +1,583 @@
+<script lang="ts">
+ import { resolve } from '$app/paths';
+ import { page } from '$app/state';
+ import { afterNavigate } from '$app/navigation';
+ import { ArrowUpRight, Check, CircleCheck, CircleX, Copy, LockKeyhole, MapPin, Clock, Navigation, Users, Share2, CalendarDays, CalendarClock, PartyPopper, Star, Vote } from '@lucide/svelte';
+ import { lang, t, errorText, formatDate, formatTime } from '#lib/i18n.ts';
+ import { track } from '#lib/telemetry.ts';
+ import LocationAttribution from '#lib/components/LocationAttribution.svelte';
+ import EventCalendar from '#lib/components/EventCalendar.svelte';
+ import EventFields from '#lib/components/EventFields.svelte';
+ import ParticipantMessage from '#lib/components/ParticipantMessage.svelte';
+ import { Button } from '#lib/components/ui/button/index.ts';
+ import type { EventData, LocationGeo, SlotDraft } from '#lib/types.ts';
+ import availabilityParty from '#lib/assets/availability-party.webp';
+
+ let event:EventData|null=null;
+ let mode=page.params.path?'loading':'create';
+ let loading=false, busy=false, tiebreakSaving=false, copied=false, editingDetails=false;
+ let errorCode='', noticeKey:keyof typeof $t|null=null;
+ let publicToken='', secret='', link='';
+ let title='', description='', location='', organizer_name='', organizer_email='';
+ let locationGeo:LocationGeo|null=null;
+ let allow_multiple_choices=true, timezone='Europe/Rome', votingDeadline='';
+ let canShare=false, recoveryOpen=false, recovering=false, recovered=false;
+ let recoveryEmail='', recoveryError='';
+ let slots:SlotDraft[]=[{date:'',start:'',end:''}];
+ let name='', email='', selected:string[]=[];
+ const selectionSources=new Set<'calendar'|'list'>();
+ let calendarMonth='', adminSlot:string|null=null;
+ let generation=0;
+ const pollStates = {
+   open: { icon: Vote, label: 'open' },
+   closed: { icon: LockKeyhole, label: 'pollClosed' },
+   confirmed: { icon: CircleCheck, label: 'confirmed' },
+   cancelled: { icon: CircleX, label: 'cancelled' }
+ } as const;
+ let pollState: keyof typeof pollStates='open';
+
+ afterNavigate(()=>{ void initialize(); });
+ async function initialize(){
+   const current=++generation;
+   calendarMonth=''; adminSlot=null;
+   selectionSources.clear();
+   tiebreakSaving=false;
+   canShare=typeof navigator.share==='function';
+   recoveryOpen=false; recovering=false; recovered=false; recoveryEmail=''; recoveryError='';
+   const parts=page.params.path?.split('/').filter(Boolean)||[];
+   errorCode=''; noticeKey=null; event=null; editingDetails=false; name='';email='';selected=[];link='';
+   if(!parts.length){mode='create';timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Rome';return;}
+   publicToken=parts[0];
+   const token=/^[A-Za-z0-9_-]{21}$/;
+   if(!token.test(publicToken) || (parts.length===3 && parts[1]!=='admin') || parts.length>3 || (parts[1]==='admin' && parts.length!==3)){
+     mode='event';errorCode='not_found';return;
+   }
+   mode=parts.length===3?'admin':parts.length===2?'edit':'event';
+   secret=mode==='admin'?parts[2]:mode==='edit'?parts[1]:'';
+   if(secret && !token.test(secret)){errorCode='not_found';return;}
+   await load(current);
+ }
+ async function request(url:string,method='GET',body?:unknown){
+   const response=await fetch(resolve(url.slice(1)),{method,headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'}).catch(()=>{
+     track('browser_network');
+     throw new Error('service_unavailable');
+   });
+   const reference=response.headers.get('x-request-id');
+   const support=reference && /^[a-f0-9-]{36}$/.test(reference) ? `:${reference}` : '';
+   if(response.status>=500){
+     if(!reference) track('browser_invalid_response');
+     throw new Error(`service_unavailable${support}`);
+   }
+   const data=await response.json().catch(()=>{
+     track('browser_invalid_response');
+     throw new Error(`service_unavailable${support}`);
+   });
+   if(!response.ok) throw new Error(typeof data?.error==='string'?data.error:'error');
+   return data;
+ }
+ async function load(current=generation){
+   loading=true;
+   try{
+     const path=mode==='admin'?`/admin/${secret}`:'';
+     const data:EventData=await request(`/api/events/${publicToken}${path}`);
+     let person;
+     if(mode==='edit') person=await request(`/api/events/${publicToken}/participant/${secret}`);
+     if(current!==generation)return;
+     event=data;
+     if(person){name=person.name;email=person.email;selected=person.slots;}
+     if (!data.slots.some(slot=>slot.id===adminSlot)) adminSlot=null;
+     const confirmedSlot=data.slots.find(slot=>slot.id===data.confirmed_slot_id);
+     if (confirmedSlot || !data.slots.some(slot=>slot.date.startsWith(calendarMonth+'-'))) {
+       calendarMonth=(confirmedSlot || data.slots.find(slot=>selected.includes(slot.id)) || data.slots[0])?.date.slice(0,7) || '';
+     }
+   }catch(error){if(current===generation){errorCode=error instanceof Error?error.message:'error';event=null;}}
+   finally{if(current===generation)loading=false;}
+ }
+ function payload(){return {title,description,location,location_geo:locationGeo,organizer_name,locale:$lang||'it',allow_multiple_choices,timezone,voting_deadline:votingDeadline||null,slots:slots.map(s=>({...s,end:s.end||null}))};}
+ function validateSlots(creating=false){
+   const dates=slots.map(s=>s.date);
+   if(new Set(dates).size!==dates.length){
+     if(creating)track('create_duplicate_date');
+     throw new Error('invalid_input');
+   }
+   if(slots.some(s=>s.end && s.end<=s.start)){
+     if(creating)track('create_time_range');
+     throw new Error('invalid_input');
+   }
+   try { new Intl.DateTimeFormat('it',{timeZone:timezone}); }
+   catch {
+     if(creating)track('create_timezone');
+     throw new Error('invalid_input');
+   }
+ }
+ async function create(){
+   errorCode='';busy=true;
+   try{
+     validateSlots(true);
+     const data=await request('/api/events','POST',{...payload(),organizer_email});
+     track(locationGeo?'location_suggested':'location_manual');
+     link=new URL(resolve(data.public_token), window.location.href).href;
+     mode='success';
+   }
+   catch(error){errorCode=error instanceof Error?error.message:'error';}
+   finally{busy=false;}
+ }
+ async function submitVote(){
+   errorCode='';busy=true;
+   try{
+     await request(`/api/events/${publicToken}/${mode==='edit'?`participant/${secret}`:'votes'}`,mode==='edit'?'PUT':'POST',{name,email,locale:$lang||'it',slots:selected});
+     if(selectionSources.size>1) track('vote_both');
+     else if(selectionSources.has('calendar')) track('vote_calendar');
+     else if(selectionSources.has('list')) track('vote_list');
+     selectionSources.clear();
+     noticeKey='saved';
+     if(mode!=='edit'){name='';email='';selected=[];}
+     await load();
+   }catch(error){
+     errorCode=error instanceof Error?error.message:'error';
+     if(errorCode==='email_exists'){
+       recoveryEmail=email;
+       recoveryOpen=true;
+     }
+     if(errorCode==='deadline_passed' && event) event={...event,voting_ended:true};
+   }
+   finally{busy=false;}
+ }
+ function selectSlot(id:string, source:'calendar'|'list') {
+   const slot=event?.slots.find(slot=>slot.id===id);
+   if (!slot || busy || event?.status!=='OPEN' || event.voting_ended) return;
+   selectionSources.add(source);
+   calendarMonth=slot.date.slice(0,7);
+   if (selected.includes(id)) selected=selected.filter(chosen=>chosen!==id);
+   else selected=event.allow_multiple_choices ? [...selected,id] : [id];
+ }
+ function focusAdminSlot(id:string) {
+   adminSlot=id;
+   const action=document.getElementById(`confirm-${id}`) as HTMLButtonElement | null;
+   if (action && !action.disabled) action.focus();
+   else document.getElementById(`option-${id}`)?.focus();
+ }
+ async function setStatus(status:string,id:string|null=null){
+   if(tiebreakSaving)return;
+   if(status==='CANCELLED' && !window.confirm($t.cancelPrompt))return;
+   errorCode='';busy=true;
+   try{await request(`/api/events/${publicToken}/admin/${secret}`,'PUT',{status,confirmed_slot_id:id,locale:$lang||'it'});adminSlot=null;noticeKey='statusSaved';await load();}
+   catch(error){errorCode=error instanceof Error?error.message:'error';}
+   finally{busy=false;}
+ }
+ async function setTiebreak(slotId:string|null){
+   if(busy||tiebreakSaving)return;
+   const current=generation;
+   errorCode='';noticeKey=null;tiebreakSaving=true;
+   try{
+     await request(`/api/events/${publicToken}/admin/${secret}/tiebreak`,'PUT',{slot_id:slotId});
+     if(current===generation)await load(current);
+   }catch(error){
+     if(current!==generation)return;
+     const code=error instanceof Error?error.message:'error';
+     if(code==='tiebreak_unavailable'||code==='event_closed')await load(current);
+     if(current===generation)errorCode=code;
+   }
+   finally{if(current===generation)tiebreakSaving=false;}
+ }
+ function editDetails(){
+   if(!event)return;
+   title=event.title;description=event.description||'';location=event.location;locationGeo=event.location_geo;organizer_name=event.organizer_name;
+   allow_multiple_choices=event.allow_multiple_choices;timezone=event.timezone;votingDeadline=event.voting_deadline||'';
+   slots=event.slots.map(s=>({...s,start:s.start.slice(0,5),end:s.end?.slice(0,5)||''}));
+   editingDetails=!editingDetails;
+ }
+ async function saveDetails(){
+   errorCode='';busy=true;
+   try{validateSlots();await request(`/api/events/${publicToken}/admin/${secret}/details`,'PUT',payload());noticeKey='changesSaved';editingDetails=false;await load();}
+   catch(error){errorCode=error instanceof Error?error.message:'error';}
+   finally{busy=false;}
+ }
+ function publicLink(){
+   return link||new URL(resolve(publicToken), window.location.href).href;
+ }
+ async function share(){
+   try {await navigator.share({title:event?.title||title,url:publicLink()});track('share_native');}
+   catch(error){if(!(error instanceof DOMException && error.name==='AbortError')) await copy();}
+ }
+ async function recover(){
+   const current=generation;
+   recoveryError=''; recovered=false; recovering=true;
+   try {
+     await request(`/api/events/${publicToken}/recover`,'POST',{email:recoveryEmail});
+     if(current===generation) recovered=true;
+   } catch(error){
+     if(current===generation) recoveryError=error instanceof Error?error.message:'error';
+   } finally {
+     if(current===generation) recovering=false;
+   }
+ }
+ async function copy(){
+   try{await navigator.clipboard.writeText(publicLink());track('share_copy');copied=true;setTimeout(()=>copied=false,2000);}
+   catch{track('browser_clipboard');errorCode='error';}
+ }
+ function countsFor(data:EventData|null){
+   const counts=new Map<string,number>();
+   for(const participant of data?.participants||[]){
+     for(const id of participant.slots) counts.set(id,(counts.get(id)||0)+1);
+   }
+   return counts;
+ }
+ function webLocation(text:string){
+   try {
+     const url=new URL(text);
+     if(url.protocol==='https:' || url.protocol==='http:') return url.href;
+   }catch{ /* Plain place names and addresses are handled separately. */ }
+   return null;
+ }
+ $: locationLink=event && !event.location_geo ? webLocation(event.location) : null;
+ $: confirmed=event?.slots.find(s=>s.id===event?.confirmed_slot_id);
+ $: voteCounts=countsFor(event);
+ $: maxVotes=Math.max(0,...voteCounts.values());
+ $: tiedLeaders=event?.status==='OPEN' && maxVotes>0
+   ? event.slots.filter(slot=>voteCounts.get(slot.id)===maxVotes)
+   : [];
+ $: decisiveSlot=event?.status==='CONFIRMED'
+   ? (confirmed?.id===event.tiebreak_slot_id ? confirmed : undefined)
+   : tiedLeaders.length>1 ? tiedLeaders.find(slot=>slot.id===event?.tiebreak_slot_id) : undefined;
+ $: leadingSlots=decisiveSlot && event?.status==='OPEN' ? [decisiveSlot] : tiedLeaders;
+ $: numbers=new Intl.NumberFormat($lang||'it');
+ $: pollState=event?.status==='CONFIRMED' ? 'confirmed' : event?.status==='CANCELLED'
+   ? 'cancelled' : event?.voting_ended ? 'closed' : 'open';
+</script>
+
+{#if mode==='create'}
+ <div class="party-scene party-scene--create">
+  <div class="create-heading">
+   <h1>{$t.create}</h1>
+   <div class="party-guests party-guests--trio" aria-hidden="true"></div>
+  </div>
+  <form id="form" on:submit|preventDefault={create} class="form-shell party-card">
+  <fieldset disabled={busy}>
+   <EventFields bind:title bind:description bind:location bind:locationGeo bind:slots bind:allow_multiple_choices bind:timezone bind:votingDeadline/>
+   <div class="divider"></div>
+   <div class="section-heading"><div><h2>{$t.organizer}</h2><p>{$t.privacy} <a href={resolve('/privacy')}>{$t.privacyTitle}</a></p></div></div>
+   <div class="form-grid">
+    <label>{$t.name} *<input name="organizer_name" required maxlength="100" autocomplete="name" bind:value={organizer_name}/></label>
+    <label>{$t.email} *<input name="organizer_email" type="email" required maxlength="255" autocomplete="email" bind:value={organizer_email}/></label>
+   </div>
+   {#if errorCode}<p class="error" role="alert">{errorText(errorCode,$t)}</p>{/if}
+   <Button type="submit" class="submit" disabled={busy}>{busy?$t.creating:$t.submit}</Button>
+  </fieldset>
+  </form>
+ </div>
+{:else if mode==='success'}
+ <div class="party-scene party-scene--success">
+  <div class="party-guests party-guests--toast" aria-hidden="true"></div>
+  <section class="center-card party-card">
+  <Check size={40} aria-hidden="true"/><h1>{$t.success}</h1><p>{$t.checkEmail}</p>
+  <div class="copy-row">
+   <label class="grow">{$t.share}<input readonly value={link}/></label>
+   <Button onclick={copy}><Copy size={16}/>{copied?$t.copied:$t.copy}</Button>
+   {#if canShare}<Button variant="outline" onclick={share}><Share2 size={16}/>{$t.shareAction}</Button>{/if}
+  </div>
+  {#if errorCode}<p class="error" role="alert">{errorText(errorCode,$t)}</p>{/if}
+  <a href={resolve('')}>{$t.back}</a>
+  </section>
+ </div>
+{:else if loading || mode==='loading'}
+ <div class="center-card" role="status">{$t.loading}</div>
+{:else if event}
+ <div class="event-layout">
+  <section class="event-header">
+   <span class="poll-status" data-state={pollState}>
+    <svelte:component this={pollStates[pollState].icon} size={17} aria-hidden="true"/>
+    {$t[pollStates[pollState].label]}
+   </span>
+   <h1>{event.title}</h1>
+   {#if event.description?.trim()}
+    <p class="event-description">{event.description}</p>
+   {/if}
+   <div class="event-details">
+    <div class="event-place">
+     <span class="place-pin"><MapPin size={19} aria-hidden="true"/></span>
+     <div class="place-content">
+      <strong>{event.location}</strong>
+      {#if event.location_geo?.kind==='approximate'}
+       <small>{$t.approximateLocation}</small>
+      {/if}
+      {#if event.location_geo}<LocationAttribution source={event.location_geo.attribution}/>{/if}
+     </div>
+     {#if event.location_geo}
+      {@const coordinates=`${event.location_geo.latitude},${event.location_geo.longitude}`}
+      <div class="place-actions">
+       <a class="place-directions" href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(coordinates)}`} target="_blank" rel="noopener noreferrer"><Navigation size={15} aria-hidden="true"/>{$t.directions}</a>
+       {#if event.location_geo.kind==='venue'}
+        <a class="place-link" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`} target="_blank" rel="noopener noreferrer" aria-label={$t.viewOnGoogleMaps}>Google Maps<ArrowUpRight size={15} aria-hidden="true"/></a>
+       {/if}
+      </div>
+     {:else if locationLink}
+      <div class="place-actions">
+       <a class="place-directions" href={locationLink} target="_blank" rel="noopener noreferrer">{$t.openLocationLink}<ArrowUpRight size={15} aria-hidden="true"/></a>
+      </div>
+     {/if}
+    </div>
+    <div class="event-facts">
+     <span class="event-fact"><Users size={16} aria-hidden="true"/><span>{$t.organized} <strong><bdi>{event.organizer_name}</bdi></strong></span></span>
+     <span class="event-fact"><Clock size={16} aria-hidden="true"/><span class="sr-only">{$t.timezone}</span><bdi>{event.timezone}</bdi></span>
+    </div>
+   </div>
+   {#if confirmed}
+    <div class="event-confirmed flex flex-wrap items-center justify-between gap-3">
+     <div><strong>{$t.confirmedDate}: {formatDate(confirmed.date,$lang)}</strong><br/>{formatTime(confirmed.start,$lang)}{confirmed.end?' – '+formatTime(confirmed.end,$lang):''} · {event.timezone}</div>
+     <a class="button outline gap-2" href={resolve(`api/events/${publicToken}/calendar.ics`)} download="frizzi.ics"><CalendarDays size={16}/>{$t.addCalendar}</a>
+    </div>
+   {:else if event.status==='OPEN' && event.voting_deadline}
+    <div class="vote-deadline" class:expired={event.voting_ended}>
+     <CalendarClock size={23} aria-hidden="true"/>
+     <div>
+      <span class="deadline-label">{$t.votingDeadline}</span>
+      <strong><time datetime={event.voting_deadline}>{formatDate(event.voting_deadline,$lang)}</time></strong>
+      <small>{$t.deadlineHint} ({event.timezone})</small>
+     </div>
+    </div>
+   {/if}
+  </section>
+  <div class="feedback-area" aria-live="polite">
+   {#if noticeKey}<p class="notice" role="status">{$t[noticeKey]}</p>{/if}
+   {#if errorCode}<p class="error" role="alert">{errorText(errorCode,$t)}</p>{/if}
+  </div>
+  {#if mode==='admin'}
+   <Button variant="outline" onclick={editDetails}>{editingDetails?$t.dismiss:$t.editDetails}</Button>
+   {#if editingDetails}
+    <section class="panel details-panel">
+     <form on:submit|preventDefault={saveDetails}><fieldset disabled={busy}>
+      <EventFields editing bind:title bind:description bind:location bind:locationGeo bind:slots bind:allow_multiple_choices bind:timezone bind:votingDeadline/>
+      <label class="mt-5">{$t.organized}<input name="organizer_name" required maxlength="100" bind:value={organizer_name}/></label>
+      <Button type="submit" class="submit" disabled={busy}>{$t.save}</Button>
+     </fieldset></form>
+    </section>
+   {/if}
+  {/if}
+  <div class="party-scene mt-5">
+   {#if event.status !== 'CANCELLED'}
+    <div class="availability-party">
+     <img src={availabilityParty} alt="" width="840" height="280" decoding="async"/>
+    </div>
+   {/if}
+   <div class="event-columns party-card">
+   <section class="panel">
+    <h2>{mode==='admin'?$t.admin:mode==='edit'?$t.edit:$t.vote}</h2>
+    <EventCalendar slots={event.slots}
+      selected={mode==='admin'?(adminSlot?[adminSlot]:[]):selected} confirmedId={event.confirmed_slot_id}
+      bind:month={calendarMonth} interactive={mode==='admin'||(event.status==='OPEN'&&!event.voting_ended)}
+      {busy} choose={mode==='admin'?focusAdminSlot:(id)=>selectSlot(id,'calendar')}/>
+    {#if mode==='admin'}
+     <div class="date-list">{#each event.slots as slot}
+      {@const count=voteCounts.get(slot.id)||0}
+      {@const leading=leadingSlots.some(leader=>leader.id===slot.id)}
+      <div class="date-option" id={`option-${slot.id}`} tabindex="-1" class:calendar-target={adminSlot===slot.id} class:chosen={event.confirmed_slot_id===slot.id || leading} class:tiebreak-picked={decisiveSlot?.id===slot.id}>
+      <div class="date-item">
+       <span class="date-item-icon"><CalendarDays size={16} aria-hidden="true"/></span>
+       <span>
+        <strong><time datetime={slot.date}>{formatDate(slot.date,$lang)}</time></strong>
+        <small>{formatTime(slot.start,$lang)}{slot.end?' – '+formatTime(slot.end,$lang):''}</small>
+        <small>{numbers.format(count)} / {numbers.format(event.participants.length)} {$t.available}{#if leading} · {$t.leadingDate}{/if}</small>
+       </span>
+      </div>
+      <Button id={`confirm-${slot.id}`} variant="outline" class="small-button" disabled={busy || tiebreakSaving || event.confirmed_slot_id===slot.id} onclick={()=>setStatus('CONFIRMED',slot.id)}>{$t.confirm}</Button>
+     </div>{/each}</div>
+     <div class="admin-actions">
+      <Button variant="ghost" disabled={busy || tiebreakSaving || event.status==='OPEN'} onclick={()=>setStatus('OPEN')}>{$t.reopen}</Button>
+      <Button variant="ghost" class="danger" disabled={busy || tiebreakSaving || event.status==='CANCELLED'} onclick={()=>setStatus('CANCELLED')}>{$t.cancel}</Button>
+     </div>
+     <h3>{$t.shareTitle}</h3>
+     <div class="flex flex-wrap gap-2">
+      <Button variant="outline" onclick={copy}><Copy size={16}/>{copied?$t.copied:$t.copy}</Button>
+      {#if canShare}<Button variant="outline" onclick={share}><Share2 size={16}/>{$t.shareAction}</Button>{/if}
+     </div>
+    {:else if event.status==='OPEN' && !event.voting_ended}
+     <p>{event.allow_multiple_choices?$t.voteText:$t.one}</p>
+     <form on:submit|preventDefault={submitVote}>
+      <fieldset disabled={busy}>
+       <legend class="sr-only">{$t.dates}</legend>
+       <div class="date-list">{#each event.slots as slot}<label class="date-option" class:chosen={selected.includes(slot.id)}>
+        <span class="date-item">
+         <span class="date-item-icon"><CalendarDays size={16} aria-hidden="true"/></span>
+         <span>
+          <strong><time datetime={slot.date}>{formatDate(slot.date,$lang)}</time></strong>
+          <small>{formatTime(slot.start,$lang)}{slot.end?' – '+formatTime(slot.end,$lang):''}</small>
+         </span>
+        </span>
+        <input type="checkbox" name="dates" aria-label={`${formatDate(slot.date,$lang)} ${formatTime(slot.start,$lang)}`} checked={selected.includes(slot.id)} on:change={()=>selectSlot(slot.id,'list')}/>
+       </label>{/each}</div>
+       <p class="fine">{$t.noDates}</p>
+       <label class="mt-5">{$t.name} *<input name="participant_name" required maxlength="100" autocomplete="name" bind:value={name}/></label>
+       <label class="mt-5">{$t.email} *<input name="participant_email" required type="email" maxlength="255" autocomplete="email" bind:value={email}/></label>
+       <p class="fine">{$t.votePrivacy} <a href={resolve('/privacy')}>{$t.privacyTitle}</a></p>
+       <Button type="submit" class="submit" disabled={busy}>{mode==='edit'?$t.save:$t.send}</Button>
+      </fieldset>
+     </form>
+    {:else}<p>{event.status==='OPEN'?$t.deadlinePassed:event.status==='CONFIRMED'?$t.confirmed:$t.cancelled}</p>{/if}
+    {#if mode!=='admin'}
+     <details class="mt-5" bind:open={recoveryOpen}>
+      <summary class="cursor-pointer text-sm font-semibold">{$t.recoverLink}</summary>
+      <form class="mt-2" on:submit|preventDefault={recover}>
+       <label>{$t.email}<input name="recovery_email" type="email" required maxlength="255" autocomplete="email" bind:value={recoveryEmail}/></label>
+       <Button type="submit" variant="outline" class="mt-2" disabled={recovering}>{$t.recoverSend}</Button>
+       {#if recovered}<p class="notice mt-2" role="status">{$t.recoverAccepted}</p>{/if}
+       {#if recoveryError}<p class="error mt-2" role="alert">{errorText(recoveryError,$t)}</p>{/if}
+      </form>
+     </details>
+    {/if}
+   </section>
+   <section class="panel responses">
+    <h2>{$t.people} <span class="count">{event.participants.length}</span></h2>
+    {#if mode==='admin'}
+     <ParticipantMessage recipients={event.participants.length}
+      send={(message,request_id)=>request(`/api/events/${publicToken}/admin/${secret}/messages`,'POST',{message,request_id})}/>
+    {/if}
+    {#if !event.participants.length}<p>{$t.noPeople}</p>{:else}
+     {#if leadingSlots.length}
+      <section class="result-leaders" aria-labelledby="result-leaders-heading">
+       <div class="leaders-title">
+        <PartyPopper size={21} aria-hidden="true"/>
+        <h3 id="result-leaders-heading">{decisiveSlot?$t.tiebreakWinner:leadingSlots.length===1?$t.topDate:$t.tiedDates}</h3>
+        <span class="leaders-count">{numbers.format(maxVotes)} / {numbers.format(event.participants.length)} {$t.available}</span>
+       </div>
+       <ul>
+        {#each leadingSlots as slot (slot.id)}
+         <li>
+          <div class="leader-date">
+           <time datetime={slot.date}>{formatDate(slot.date,$lang)}</time>
+           {#if decisiveSlot}<span class="tiebreak-badge"><Star size={14} aria-hidden="true"/>{$t.tiebreakBadge}</span>{/if}
+           {#if mode==='admin' && tiedLeaders.length>1 && !decisiveSlot}
+            <button type="button" class="tiebreak-action" disabled={busy||tiebreakSaving} on:click={()=>setTiebreak(slot.id)}
+             aria-label={`${$t.tiebreakVote} · ${formatDate(slot.date,$lang)}`}><Star size={14} aria-hidden="true"/>{$t.tiebreakVote}</button>
+           {/if}
+          </div>
+         </li>
+        {/each}
+       </ul>
+       {#if mode==='admin' && decisiveSlot}
+        <button type="button" class="tiebreak-action tiebreak-undo" disabled={busy||tiebreakSaving} on:click={()=>setTiebreak(null)}>{$t.tiebreakUndo}</button>
+       {/if}
+      </section>
+     {/if}
+     <div class="participants" aria-label={$t.allParticipants}>{#each event.participants as person}<span>{person.name}</span>{/each}</div>
+     <div class="results">{#each event.slots as slot}
+      {@const count=voteCounts.get(slot.id)||0}
+      <div class="result"><strong>{formatDate(slot.date,$lang)}</strong>
+       {#if event.status==='CONFIRMED' && decisiveSlot?.id===slot.id}<span class="tiebreak-badge"><Star size={14} aria-hidden="true"/>{$t.tiebreakBadge}</span>{/if}
+       <span>{count} {$t.available}</span><div class="bar"><i style={`width:${100*count/event.participants.length}%`}></i></div><small>{event.participants.filter(p=>p.slots.includes(slot.id)).map(p=>p.name).join(', ')}</small>
+      </div>
+     {/each}</div>
+    {/if}
+   </section>
+   </div>
+  </div>
+ </div>
+{:else}
+ <section class="center-card"><p class="error" role="alert">{errorText(errorCode||'not_found',$t)}</p><a href={resolve('')}>{$t.back}</a></section>
+{/if}
+
+<style>
+ .poll-status {
+   display: inline-flex;
+   align-items: center;
+   gap: 7px;
+   padding: 5px 10px;
+   border: 1px solid #c8dfbc;
+   border-radius: 999px;
+   background: #edf7e6;
+   color: #254c32;
+   font-size: 13px;
+   font-weight: 700;
+   line-height: 1.3;
+ }
+ .poll-status[data-state="closed"] { background: #fff1d2; color: #62430f; border-color: #e9ca88; }
+ .poll-status[data-state="confirmed"] { background: #e9f1ff; color: #224a81; border-color: #bfd1ee; }
+ .poll-status[data-state="cancelled"] { background: #fee9e9; color: #842c3a; border-color: #edbdc5; }
+ .poll-status :global(svg) { flex-shrink: 0; }
+ .date-option { padding: 12px 14px; }
+ label.date-option { flex-wrap: nowrap; }
+ label.date-option input { flex-shrink: 0; }
+ .date-item { display: flex; align-items: center; gap: 9px; min-width: 0; overflow-wrap: anywhere; }
+ .date-item-icon {
+   display: grid;
+   place-items: center;
+   flex: 0 0 31px;
+   height: 31px;
+   border-radius: 8px;
+   background: #eef4ea;
+   color: #40664b;
+ }
+ .date-option.chosen .date-item-icon { background: #dcefd1; color: #315838; }
+ .date-option.tiebreak-picked .date-item-icon { background: #e6d6f7; color: #472963; }
+ .event-header .event-description {
+   max-width: 74ch;
+   margin: 12px 0 16px;
+   border-inline-start: 3px solid #9bc775;
+   padding-inline-start: 12px;
+   color: #3d5345;
+   font: 400 16px/1.55 var(--font-ui);
+   white-space: pre-wrap;
+   overflow-wrap: anywhere;
+ }
+ .event-details { margin-top: 12px; }
+ .event-place {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: center;
+   gap: 8px 12px;
+   padding: 10px 12px;
+   border: 1px solid #dce8d3;
+   border-radius: 12px;
+   background: #eff6e9;
+ }
+ .place-pin {
+   display: grid;
+   place-items: center;
+   flex: 0 0 36px;
+   height: 36px;
+   border-radius: 10px;
+   background: #d4edb6;
+   color: #2d593b;
+ }
+ .place-content {
+   flex: 1 1 200px;
+   min-width: min(100% - 48px, 130px);
+   overflow-wrap: anywhere;
+ }
+ .place-content strong {
+   display: block;
+   font: 700 16px/1.35 var(--font-ui);
+   color: #203b2b;
+ }
+ .place-content small { display: block; color: #4f634e; font-size: 12px; }
+ .place-content :global(p) { margin-top: 2px; line-height: 1.35; }
+ .place-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+ .place-actions a {
+   display: inline-flex;
+   align-items: center;
+   gap: 6px;
+   min-height: 34px;
+   font-size: 13px;
+   font-weight: 700;
+ }
+ .place-actions a:focus-visible { outline: 2px solid #47762e; outline-offset: 3px; }
+ .place-directions { padding: 4px 10px; border-radius: 8px; background: #254b35; color: white; text-decoration: none; }
+ .place-directions:hover { background: #356245; }
+ .place-link { color: #32593e; text-underline-offset: 3px; }
+ .event-facts { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 8px; }
+ .event-fact {
+   display: inline-flex;
+   align-items: center;
+   gap: 6px;
+   max-width: 100%;
+   padding: 4px 9px;
+   border: 1px solid #e5e8de;
+   border-radius: 8px;
+   background: #fff;
+   color: #4b6050;
+   font-size: 13px;
+   overflow-wrap: anywhere;
+ }
+ .event-fact :global(svg) { flex-shrink: 0; color: #55734d; }
+ .event-fact strong { color: #283f31; }
+</style>
