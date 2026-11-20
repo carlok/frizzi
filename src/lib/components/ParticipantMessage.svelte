@@ -60,7 +60,7 @@
     aria-describedby="participant-message-hint" bind:this={field} bind:value={message}></textarea>
    <p class="fine" id="participant-message-hint">{$t.messageFormatting}</p>
    <div class="message-actions">
-    <Button type="submit" disabled={sending||!message.trim()}><Send size={16}/>{sending?$t.loading:$t.sendParticipantMessage}</Button>
+    <Button type="submit" disabled={sending||!message.trim()}><Send size={16} class="rtl:-scale-x-100" aria-hidden="true"/>{sending?$t.loading:$t.sendParticipantMessage}</Button>
     <span class="fine">{$t.messageRecipients} <strong>{numbers.format(recipients)}</strong></span>
    </div>
    {#if queued !== null}<p class="notice" role="status">{$plural('messageQueued',queued)}</p>{/if}
@@ -75,6 +75,6 @@
  summary :global(svg) { display: inline-block; vertical-align: middle; margin-inline-end: 5px; }
  form { margin-top: 12px; }
  .formatting { display: flex; gap: 6px; margin-top: 6px; }
- .formatting button { display: grid; place-items: center; padding: 5px; border: 1px solid #cfdacb; border-radius: 6px; color: #263f2c; background: white; cursor: pointer; }
+ .formatting button { display: grid; place-items: center; padding: 5px; border: 1px solid var(--control-border); border-radius: 6px; color: #263f2c; background: white; cursor: pointer; }
  .message-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 </style>

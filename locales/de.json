@@ -142,7 +142,9 @@
     "errorTitle": "Etwas ist schiefgelaufen",
     "availableCount": "{count, plural, one {{n} verfügbar} other {{n} verfügbar}}",
     "availableOf": "{count, plural, one {{n} / {total} verfügbar} other {{n} / {total} verfügbar}}",
-    "dateLetters": "TT MM JJJJ"
+    "dateLetters": "TT MM JJJJ",
+    "openDatePicker": "Kalender öffnen",
+    "highlightedDate": "Hervorgehobener Termin"
   },
   "pdf": {
     "invitation": "Einladung",

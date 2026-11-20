@@ -142,7 +142,9 @@
     "errorTitle": "Un problème est survenu",
     "availableCount": "{count, plural, one {{n} disponible} other {{n} disponibles}}",
     "availableOf": "{count, plural, one {{n} / {total} disponible} other {{n} / {total} disponibles}}",
-    "dateLetters": "JJ MM AAAA"
+    "dateLetters": "JJ MM AAAA",
+    "openDatePicker": "Ouvrir le calendrier",
+    "highlightedDate": "Date mise en évidence"
   },
   "pdf": {
     "invitation": "Lettre d’invitation",

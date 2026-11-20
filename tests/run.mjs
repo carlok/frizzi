@@ -370,6 +370,8 @@ try{
  check(await dateInput.getAttribute('placeholder')==='GG/MM/AAAA','Italian date field spells day/month/year in Italian');
  await dateInput.fill('31/02/2030');
  check(await dateInput.evaluate(input=>!input.checkValidity()),'Localized date rejects an impossible day');
+ await dateInput.blur();
+ check(await dateInput.getAttribute('aria-invalid')==='true'&&await page.getByText('Inserisci una data valida nel formato indicato.').isVisible(),'An impossible date is flagged with aria-invalid and a visible message');
  await dateInput.fill('31032030');
  await dateInput.blur();
  check(await dateInput.inputValue()==='31/03/2030','Compact keyboard entry is normalized to the selected date format');
@@ -389,6 +391,7 @@ try{
  await page.locator('[name="voting_deadline"]').fill('25/02/2030');
  await page.getByRole('button',{name:'Aggiungi una data'}).click();
  check(await page.locator('[name="date-1"]').inputValue()==='01/04/2030','New date defaults to the next calendar day across a month boundary');
+ check(await page.locator('[name="date-1"]').evaluate(input=>input===document.activeElement),'Adding a date focuses its date field');
  check(await page.locator('[name="start-1-hour"]').inputValue()==='19' && await page.locator('[name="start-1-minute"]').inputValue()==='30','New date copies the start time');
  check(await page.locator('[name="end-1-hour"]').inputValue()==='22' && await page.locator('[name="end-1-minute"]').inputValue()==='45','New date copies the end time');
  await page.locator('[name="end-1-hour"]').selectOption('');
@@ -396,6 +399,7 @@ try{
  await page.locator('[name="organizer_name"]').fill('Browser Ada');await page.locator('[name="organizer_email"]').fill('browser@example.test');
  await page.getByRole('button',{name:'Crea evento',exact:true}).click();
  await page.getByRole('heading',{name:'Evento creato!',exact:true}).waitFor();
+ check(await page.getByRole('heading',{name:'Evento creato!',exact:true}).evaluate(heading=>heading===document.activeElement),'The success heading takes focus after creating');
  const publicUrl=await page.locator('input[readonly]').inputValue();const browserToken=publicUrl.split('/').at(-1);
  await page.getByRole('button',{name:'Condividi',exact:true}).click();
  check(JSON.parse(await page.evaluate(()=>localStorage.getItem('sharedEvent'))).url===publicUrl,'Share opens the public event only');
@@ -405,6 +409,7 @@ try{
  await page.locator('[name="date-0"]').fill('31/02');await page.getByRole('button',{name:'Aggiungi una data'}).click();
  await page.getByRole('button',{name:/^Rimuovi/}).first().click();
  check(await page.locator('[name="date-0"]').inputValue()===''&&await page.locator('[name="date-1"]').count()===0,'Removing a date row leaves no stale draft in the next one');
+ check(await page.getByRole('button',{name:'Aggiungi una data'}).evaluate(button=>button===document.activeElement),'Removing the second-last row moves focus to Add a date');
  const browserAdmin=tokenFrom((await messageFor('browser@example.test')).Text);
  const debugResponse=await fetch(`${api}/api/events/${browserToken}/admin/${browserAdmin}/tiebreak`,{
   method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot_id:randomUUID()})
@@ -461,13 +466,15 @@ try{
  await checkboxes.last().check();
  await aprilDay.waitFor();
  check(await aprilDay.getAttribute('aria-pressed')==='true','Checkbox selects and reveals a date in another month');
- await page.getByRole('button',{name:'Mese precedente',exact:true}).click();
+ check(await page.locator('.event-calendar').getAttribute('aria-hidden')==='true'&&await marchDay.getAttribute('tabindex')==='-1','The calendar mirrors the date list for pointer users only');
+ await page.locator('.calendar-month button[aria-label="Mese precedente"]').click();
  check(await marchDay.getAttribute('aria-pressed')==='true','Selections survive month navigation');
  await checkboxes.last().uncheck();
  await page.evaluate(()=>{document.querySelector('.event-header').dataset.mounted='yes';document.addEventListener('click',()=>window.clickScroll=scrollY,{once:true,capture:true});});
  await page.getByRole('button',{name:'Invia disponibilità',exact:true}).click();
- await page.getByRole('status').filter({hasText:'Risposta salvata'}).waitFor();
+ await page.locator('.feedback-area .notice').filter({hasText:'Risposta salvata'}).waitFor();
  check(await page.evaluate(()=>document.querySelector('.event-header')?.dataset.mounted==='yes'&&window.clickScroll>0&&scrollY>0),'Saving a vote refreshes the results without remounting the page or jumping to the top');
+ check(await page.evaluate(()=>document.activeElement?.classList.contains('notice'))&&await page.getByRole('list',{name:'Tutti i partecipanti'}).getByRole('listitem').count()===1,'The saved notice takes focus and participants are a named list');
  check((await page.locator('.result>span').allTextContents()).join('|')==='1 disponibile|0 disponibili','Vote counts use Italian singular and plural forms');
  await until(async()=>{
   const stats=await client.query("SELECT count(*) FROM usage_metrics WHERE (action, outcome) IN (('create_event','ok'),('event_location','suggested'),('vote_selection','both'),('share','native'),('browser_error','invalid_response'))");
@@ -493,7 +500,7 @@ try{
  const singleDates=(await call('/api/events/'+single.public_token)).slots;
  await page.locator(`button[data-calendar-date="${singleDates[0].date}"]`).click();
  await checkboxes.last().check();
- check(!(await checkboxes.first().isChecked()) && await page.locator(`button[data-calendar-date="${singleDates[1].date}"]`).getAttribute('aria-pressed')==='true','Single-choice mode replaces the previous selection');
+ check(!(await checkboxes.first().isChecked()) && await page.locator(`button[data-calendar-date="${singleDates[1].date}"]`).getAttribute('aria-pressed')==='true'&&await checkboxes.first().getAttribute('type')==='radio','Single-choice mode is a radio group that replaces the previous selection');
  await page.goto(`${publicUrl}/admin/${browserAdmin}`);
  await page.getByText(/Più disponibilità/).first().waitFor();
  await page.getByText('Scrivi ai partecipanti',{exact:true}).click();
@@ -505,7 +512,7 @@ try{
  await page.getByRole('button',{name:'Invia messaggio',exact:true}).click();
  await page.getByRole('status').filter({hasText:'1 email in coda'}).waitFor();
  check((await messageFor('browser-guest@example.test','💌 Una novità per te!')).HTML.includes('<b>Ci vediamo domani!</b>'),'Admin composer delivers the formatted message');
- await page.getByRole('button',{name:'Mese successivo',exact:true}).click();
+ await page.locator('.calendar-month button[aria-label="Mese successivo"]').click();
  await aprilDay.click();
  check(await page.evaluate(()=>document.activeElement?.id.startsWith('confirm-')) && (await call('/api/events/'+browserToken)).status==='OPEN','Admin selection focuses the confirmation without changing event status');
  check(await page.getByText(/Più disponibilità/).count()===2,'Admin highlights tied dates');
@@ -513,7 +520,7 @@ try{
  check(await page.locator('[name="voting_deadline"]').inputValue()==='25/02/2030','Admin can see configured deadline in the active date format');
  check(await page.locator('[name="start-0-hour"]').inputValue()==='19' && await page.locator('[name="start-0-minute"]').inputValue()==='30','Stored time loads in the editor');
  await page.locator('[name="location"]').fill('Bologna');await page.getByRole('button',{name:'Salva modifiche',exact:true}).click();
- await page.getByRole('status').filter({hasText:'Modifiche salvate'}).waitFor();
+ await page.locator('.feedback-area .notice').filter({hasText:'Modifiche salvate'}).waitFor();
  const editedVenue=await call(`/api/events/${browserToken}`);
  check(editedVenue.location==='Bologna' && editedVenue.location_geo===null,'Manual editing clears stale coordinates');
  await leaders.getByRole('button',{name:/Voto di spareggio.*31\/03\/2030/}).click();
@@ -528,7 +535,8 @@ try{
  await page.getByText('Voto decisivo dell’organizzatore',{exact:true}).waitFor();
  check(await page.getByRole('button',{name:/spareggio/i}).count()===0,'Participants see the deciding vote without organizer controls');
  await page.goto(`${publicUrl}/admin/${browserAdmin}`);
- const confirmDate=page.getByRole('button',{name:'Conferma questa data',exact:true}).first();
+ check(new Set(await page.getByRole('button',{name:/^Conferma questa data · /}).evaluateAll(buttons=>buttons.map(button=>button.getAttribute('aria-label')))).size===2,'Each confirm button names its date');
+ const confirmDate=page.getByRole('button',{name:/^Conferma questa data · /}).first();
  const confirmDialog=page.getByRole('dialog',{name:'Confermare questa data?'});
  await confirmDate.click();await confirmDialog.waitFor();await page.keyboard.press('Escape');await confirmDialog.waitFor({state:'hidden'});
  check((await call('/api/events/'+browserToken)).status==='OPEN'&&await confirmDate.evaluate(button=>button===document.activeElement),'Confirming a date needs the dialog; Escape keeps the poll open and returns focus');

@@ -8,7 +8,7 @@
  import * as poll from '#lib/poll.ts';
  import { parsePath } from '#lib/route.ts';
  import { datesChanged, slotDraft, slotPayload } from '#lib/slots.ts';
- import { onDestroy } from 'svelte';
+ import { onDestroy, tick } from 'svelte';
  import LocationAttribution from '#lib/components/LocationAttribution.svelte';
  import EventCalendar from '#lib/components/EventCalendar.svelte';
  import EventFields from '#lib/components/EventFields.svelte';
@@ -33,7 +33,7 @@
  const selectionSources=new Set<'calendar'|'list'>();
  let calendarMonth='', adminSlot:string|null=null;
  let generation=0, copiedTimer:ReturnType<typeof setTimeout>|undefined;
- let confirmDialog:ConfirmDialog;
+ let confirmDialog:ConfirmDialog, successHeading:HTMLElement, noticeElement:HTMLElement;
  onDestroy(()=>clearTimeout(copiedTimer));
  const pollStates = {
    open: { icon: Vote, label: 'open' },
@@ -123,6 +123,7 @@
      track(locationGeo?'location_suggested':'location_manual');
      link=new URL(resolve(data.public_token), window.location.href).href;
      mode='success';
+     await tick();successHeading?.focus();
    }
    catch(error){errorCode=error instanceof Error?error.message:'error';}
    finally{busy=false;}
@@ -135,9 +136,9 @@
      else if(selectionSources.has('calendar')) track('vote_calendar');
      else if(selectionSources.has('list')) track('vote_list');
      selectionSources.clear();
-     noticeKey='saved';
      if(mode!=='edit'){name='';email='';selected=[];}
      await load();
+     await notice('saved');
    }catch(error){
      errorCode=error instanceof Error?error.message:'error';
      if(errorCode==='email_exists'){
@@ -147,6 +148,10 @@
      if(errorCode==='deadline_passed' && event) event={...event,voting_ended:true};
    }
    finally{busy=false;}
+ }
+ // The notice takes focus: the control that triggered the save may be gone or disabled now.
+ async function notice(key:NonNullable<typeof noticeKey>){
+   noticeKey=key;await tick();noticeElement?.focus();
  }
  function selectSlot(id:string, source:'calendar'|'list') {
    const slot=event?.slots.find(slot=>slot.id===id);
@@ -171,7 +176,7 @@
      :{title:$t.cancelPrompt,text:$t.cancelText,confirm:$t.cancel,cancel:$t.keepEvent,danger:true};
    if(!await confirmDialog.ask(question))return;
    errorCode='';noticeKey=null;busy=true;
-   try{await request(`/api/events/${publicToken}/admin/${secret}`,'PUT',{status,confirmed_slot_id:id,locale:$lang||'it'});adminSlot=null;noticeKey='statusSaved';await load();}
+   try{await request(`/api/events/${publicToken}/admin/${secret}`,'PUT',{status,confirmed_slot_id:id,locale:$lang||'it'});adminSlot=null;await load();await notice('statusSaved');}
    catch(error){errorCode=error instanceof Error?error.message:'error';}
    finally{busy=false;}
  }
@@ -201,7 +206,7 @@
    if(event && (timezone!==event.timezone || datesChanged(event.slots,slots))
      && !await confirmDialog.ask({title:$t.datesChangedTitle,text:$t.datesChangedHint,confirm:$t.save,cancel:$t.goBack}))return;
    errorCode='';noticeKey=null;busy=true;
-   try{validateSlots();await request(`/api/events/${publicToken}/admin/${secret}/details`,'PUT',payload());noticeKey='changesSaved';editingDetails=false;await load();}
+   try{validateSlots();await request(`/api/events/${publicToken}/admin/${secret}/details`,'PUT',payload());editingDetails=false;await load();await notice('changesSaved');}
    catch(error){errorCode=error instanceof Error?error.message:'error';}
    finally{busy=false;}
  }
@@ -274,10 +279,10 @@
  <div class="party-scene party-scene--success">
   <div class="party-guests party-guests--toast" aria-hidden="true"></div>
   <section class="center-card party-card">
-  <Check size={40} aria-hidden="true"/><h1>{$t.success}</h1><p>{$t.checkEmail}</p>
+  <Check size={40} aria-hidden="true"/><h1 tabindex="-1" bind:this={successHeading}>{$t.success}</h1><p>{$t.checkEmail}</p>
   <div class="copy-row">
    <label class="grow">{$t.share}<input readonly value={link}/></label>
-   <Button onclick={copy}><Copy size={16}/>{copied?$t.copied:$t.copy}</Button>
+   <Button onclick={copy}><Copy size={16}/>{copied?$t.copied:$t.copy}</Button><span class="sr-only" role="status">{copied?$t.copied:''}</span>
    {#if canShare}<Button variant="outline" onclick={share}><Share2 size={16}/>{$t.shareAction}</Button>{/if}
   </div>
   {#if errorCode}<p class="error" role="alert">{errorText(errorCode,$t)}</p>{/if}
@@ -293,7 +298,7 @@
     <svelte:component this={pollStates[pollState].icon} size={17} aria-hidden="true"/>
     {$t[pollStates[pollState].label]}
    </span>
-   <h1>{event.title}</h1>
+   <h1><bdi>{event.title}</bdi></h1>
    {#if event.description?.trim()}
     <p class="event-description">{event.description}</p>
    {/if}
@@ -301,7 +306,7 @@
     <div class="event-place">
      <span class="place-pin"><MapPin size={19} aria-hidden="true"/></span>
      <div class="place-content">
-      <strong>{event.location}</strong>
+      <strong><bdi>{event.location}</bdi></strong>
       {#if event.location_geo?.kind==='approximate'}
        <small>{$t.approximateLocation}</small>
       {/if}
@@ -312,12 +317,12 @@
       <div class="place-actions">
        <a class="place-directions" href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(coordinates)}`} target="_blank" rel="noopener noreferrer"><Navigation size={15} aria-hidden="true"/>{$t.directions}</a>
        {#if event.location_geo.kind==='venue'}
-        <a class="place-link" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`} target="_blank" rel="noopener noreferrer" aria-label={$t.viewOnGoogleMaps}>Google Maps<ArrowUpRight size={15} aria-hidden="true"/></a>
+        <a class="place-link" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`} target="_blank" rel="noopener noreferrer" aria-label={$t.viewOnGoogleMaps}>Google Maps<ArrowUpRight size={15} class="rtl:-scale-x-100" aria-hidden="true"/></a>
        {/if}
       </div>
      {:else if locationLink}
       <div class="place-actions">
-       <a class="place-directions" href={locationLink} target="_blank" rel="noopener noreferrer">{$t.openLocationLink}<ArrowUpRight size={15} aria-hidden="true"/></a>
+       <a class="place-directions" href={locationLink} target="_blank" rel="noopener noreferrer">{$t.openLocationLink}<ArrowUpRight size={15} class="rtl:-scale-x-100" aria-hidden="true"/></a>
       </div>
      {/if}
     </div>
@@ -342,9 +347,9 @@
     </div>
    {/if}
   </section>
-  <div class="feedback-area" aria-live="polite">
-   {#if noticeKey}<p class="notice" role="status">{$t[noticeKey]}</p>{/if}
-   {#if errorCode}<p class="error" role="alert">{errorText(errorCode,$t)}</p>{/if}
+  <div class="feedback-area">
+   {#if noticeKey}<p class="notice" tabindex="-1" bind:this={noticeElement}>{$t[noticeKey]}</p>{/if}
+   {#if errorCode}<p class="error" role="alert" id="feedback-error">{errorText(errorCode,$t)}</p>{/if}
   </div>
   {#if mode==='admin'}
    <Button variant="outline" onclick={editDetails}>{editingDetails?$t.dismiss:$t.editDetails}</Button>
@@ -370,7 +375,8 @@
     <EventCalendar slots={event.slots}
       selected={mode==='admin'?(adminSlot?[adminSlot]:[]):selected} confirmedId={event.confirmed_slot_id}
       bind:month={calendarMonth} interactive={mode==='admin'||(event.status==='OPEN'&&!event.voting_ended)}
-      {busy} choose={mode==='admin'?focusAdminSlot:(id)=>selectSlot(id,'calendar')}/>
+      {busy} choose={mode==='admin'?focusAdminSlot:(id)=>selectSlot(id,'calendar')}
+      mirrored={mode==='admin'||(event.status==='OPEN'&&!event.voting_ended)} markedLabel={mode==='admin'?$t.highlightedDate:''}/>
     {#if mode==='admin'}
      <div class="date-list">{#each event.slots as slot}
       {@const count=voteCounts.get(slot.id)||0}
@@ -384,7 +390,7 @@
         <small>{$plural('availableOf',count,{total:event.participants.length})}{#if leading} · {$t.leadingDate}{/if}</small>
        </span>
       </div>
-      <Button id={`confirm-${slot.id}`} variant="outline" class="small-button" disabled={busy || tiebreakSaving || event.confirmed_slot_id===slot.id} onclick={()=>setStatus('CONFIRMED',slot.id)}>{$t.confirm}</Button>
+      <Button id={`confirm-${slot.id}`} variant="outline" class="small-button" disabled={busy || tiebreakSaving || event.confirmed_slot_id===slot.id} onclick={()=>setStatus('CONFIRMED',slot.id)} aria-label={`${$t.confirm} · ${formatDate(slot.date,$lang)}`}>{$t.confirm}</Button>
      </div>{/each}</div>
      <div class="admin-actions">
       <Button variant="ghost" disabled={busy || tiebreakSaving || event.status==='OPEN'} onclick={()=>setStatus('OPEN')}>{$t.reopen}</Button>
@@ -392,14 +398,14 @@
      </div>
      <h3>{$t.shareTitle}</h3>
      <div class="flex flex-wrap gap-2">
-      <Button variant="outline" onclick={copy}><Copy size={16}/>{copied?$t.copied:$t.copy}</Button>
+      <Button variant="outline" onclick={copy}><Copy size={16}/>{copied?$t.copied:$t.copy}</Button><span class="sr-only" role="status">{copied?$t.copied:''}</span>
       {#if canShare}<Button variant="outline" onclick={share}><Share2 size={16}/>{$t.shareAction}</Button>{/if}
      </div>
     {:else if event.status==='OPEN' && !event.voting_ended}
-     <p>{event.allow_multiple_choices?$t.voteText:$t.one}</p>
      <form on:submit|preventDefault={submitVote}>
       <fieldset disabled={busy}>
-       <legend class="sr-only">{$t.dates}</legend>
+       <fieldset>
+       <legend class="vote-legend">{event.allow_multiple_choices?$t.voteText:$t.one}</legend>
        <div class="date-list">{#each event.slots as slot}<label class="date-option" class:chosen={selected.includes(slot.id)}>
         <span class="date-item">
          <span class="date-item-icon"><CalendarDays size={16} aria-hidden="true"/></span>
@@ -408,11 +414,13 @@
           <small>{formatTime(slot.start,$lang)}{slot.end?' – '+formatTime(slot.end,$lang):''}</small>
          </span>
         </span>
-        <input type="checkbox" name="dates" aria-label={`${formatDate(slot.date,$lang)} ${formatTime(slot.start,$lang)}`} checked={selected.includes(slot.id)} on:change={()=>selectSlot(slot.id,'list')}/>
+        <input type={event.allow_multiple_choices?'checkbox':'radio'} name="dates" aria-label={`${formatDate(slot.date,$lang)} ${formatTime(slot.start,$lang)}`} checked={selected.includes(slot.id)} on:change={()=>selectSlot(slot.id,'list')}/>
        </label>{/each}</div>
        <p class="fine">{$t.noDates}</p>
+       </fieldset>
        <label class="mt-5">{$t.name} *<input name="participant_name" required maxlength="100" autocomplete="name" bind:value={name}/></label>
-       <label class="mt-5">{$t.email} *<input name="participant_email" required type="email" maxlength="255" autocomplete="email" bind:value={email}/></label>
+       <label class="mt-5">{$t.email} *<input name="participant_email" required type="email" maxlength="255" autocomplete="email" bind:value={email}
+        aria-invalid={errorCode==='email_exists'} aria-describedby={errorCode==='email_exists'?'feedback-error':undefined}/></label>
        <p class="fine">{$t.votePrivacy} <a href={resolve('/privacy')}>{$t.privacyTitle}</a></p>
        <Button type="submit" class="submit" disabled={busy}>{mode==='edit'?$t.save:$t.send}</Button>
       </fieldset>
@@ -463,12 +471,12 @@
        {/if}
       </section>
      {/if}
-     <div class="participants" aria-label={$t.allParticipants}>{#each event.participants as person}<span>{person.name}</span>{/each}</div>
+     <ul class="participants" role="list" aria-label={$t.allParticipants}>{#each event.participants as person}<li><bdi>{person.name}</bdi></li>{/each}</ul>
      <div class="results">{#each event.slots as slot}
       {@const count=voteCounts.get(slot.id)||0}
       <div class="result"><strong>{formatDate(slot.date,$lang)}</strong>
        {#if event.status==='CONFIRMED' && decisiveSlot?.id===slot.id}<span class="tiebreak-badge"><Star size={14} aria-hidden="true"/>{$t.tiebreakBadge}</span>{/if}
-       <span>{$plural('availableCount',count)}</span><div class="bar"><i style={`width:${100*count/event.participants.length}%`}></i></div><small>{event.participants.filter(p=>p.slots.includes(slot.id)).map(p=>p.name).join(', ')}</small>
+       <span>{$plural('availableCount',count)}</span><div class="bar"><i style={`width:${100*count/event.participants.length}%`}></i></div><small>{#each event.participants.filter(p=>p.slots.includes(slot.id)) as person,i}{i?', ':''}<bdi>{person.name}</bdi>{/each}</small>
       </div>
      {/each}</div>
     {/if}

@@ -142,7 +142,9 @@
     "errorTitle": "Something went wrong",
     "availableCount": "{count, plural, one {{n} available} other {{n} available}}",
     "availableOf": "{count, plural, one {{n} / {total} available} other {{n} / {total} available}}",
-    "dateLetters": "DD MM YYYY"
+    "dateLetters": "DD MM YYYY",
+    "openDatePicker": "Open date picker",
+    "highlightedDate": "Highlighted date"
   },
   "pdf": {
     "invitation": "Your invitation",

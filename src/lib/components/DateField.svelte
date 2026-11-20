@@ -25,7 +25,12 @@
    syncedValue = value;
    syncedFormatter = formatter;
  }
- $: input?.setCustomValidity(draft.trim() && !value ? $t.invalidDate : '');
+ $: invalid = !!draft.trim() && !value;
+ $: input?.setCustomValidity(invalid ? $t.invalidDate : '');
+ // The error shows once the person leaves the field or submits, not while typing.
+ let touched = false;
+ $: showError = invalid && touched;
+ $: describedByIds = [describedBy, showError ? `${name}-error` : ''].filter(Boolean).join(' ') || undefined;
 
  function setDraft(raw: string) {
    draft = raw;
@@ -50,15 +55,17 @@
 <label for={name}>{label}{required ? ' *' : ''}</label>
 <div class="date-entry">
  <input id={name} {name} type="text" inputmode="numeric" autocomplete="off"
-  {required} {placeholder} aria-describedby={describedBy} bind:this={input} value={draft}
+  {required} {placeholder} aria-describedby={describedByIds} aria-invalid={showError} bind:this={input} value={draft}
   on:input={(event) => setDraft(event.currentTarget.value)}
-  on:blur={() => { if (value) usePicker(value); }}/>
- <button type="button" class="date-picker-button" aria-label={`${label}: ${$t.eventCalendar}`} on:click={showCalendar}>
+  on:invalid={() => touched = true}
+  on:blur={() => { touched = true; if (value) usePicker(value); }}/>
+ <button type="button" class="date-picker-button" aria-label={`${$t.openDatePicker}: ${label}`} on:click={showCalendar}>
   <CalendarDays size={17} aria-hidden="true"/>
  </button>
  <input class="native-date" type="date" tabindex="-1" aria-hidden="true" min="0001-01-01" max="9999-12-31"
   value={value} bind:this={picker} on:change={(event) => usePicker(event.currentTarget.value)}/>
 </div>
+{#if showError}<p class="field-error" id={`${name}-error`}>{$t.invalidDate}</p>{/if}
 
 <style>
  .date-entry { position: relative; }

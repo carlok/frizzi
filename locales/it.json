@@ -142,7 +142,9 @@
     "errorTitle": "Qualcosa è andato storto",
     "availableCount": "{count, plural, one {{n} disponibile} other {{n} disponibili}}",
     "availableOf": "{count, plural, one {{n} / {total} disponibile} other {{n} / {total} disponibili}}",
-    "dateLetters": "GG MM AAAA"
+    "dateLetters": "GG MM AAAA",
+    "openDatePicker": "Apri il calendario",
+    "highlightedDate": "Data evidenziata"
   },
   "pdf": {
     "invitation": "Lettera d’invito",

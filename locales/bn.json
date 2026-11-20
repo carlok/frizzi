@@ -142,7 +142,9 @@
     "errorTitle": "কিছু একটা সমস্যা হয়েছে",
     "availableCount": "{count, plural, one {{n} জন আসতে পারবেন} other {{n} জন আসতে পারবেন}}",
     "availableOf": "{count, plural, one {{n} / {total} জন আসতে পারবেন} other {{n} / {total} জন আসতে পারবেন}}",
-    "dateLetters": "দিন মাস বছর"
+    "dateLetters": "দিন মাস বছর",
+    "openDatePicker": "ক্যালেন্ডার খুলুন",
+    "highlightedDate": "চিহ্নিত তারিখ"
   },
   "pdf": {
     "invitation": "আমন্ত্রণপত্র",

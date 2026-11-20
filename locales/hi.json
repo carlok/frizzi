@@ -142,7 +142,9 @@
     "errorTitle": "कुछ गलत हो गया",
     "availableCount": "{count, plural, one {{n} उपलब्ध} other {{n} उपलब्ध}}",
     "availableOf": "{count, plural, one {{n} / {total} उपलब्ध} other {{n} / {total} उपलब्ध}}",
-    "dateLetters": "दिन माह वर्ष"
+    "dateLetters": "दिन माह वर्ष",
+    "openDatePicker": "कैलेंडर खोलें",
+    "highlightedDate": "हाइलाइट की गई तारीख"
   },
   "pdf": {
     "invitation": "आमंत्रण पत्र",

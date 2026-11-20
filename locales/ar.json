@@ -142,7 +142,9 @@
     "errorTitle": "حدث خطأ ما",
     "availableCount": "{count, plural, zero {لا أحد متاح} one {شخص واحد متاح} two {شخصان متاحان} few {{n} أشخاص متاحون} many {{n} شخصًا متاحًا} other {{n} شخص متاح}}",
     "availableOf": "{count, plural, zero {{n} / {total} متاح} one {{n} / {total} متاح} two {{n} / {total} متاحان} few {{n} / {total} متاحون} many {{n} / {total} متاحًا} other {{n} / {total} متاح}}",
-    "dateLetters": "يوم شهر سنة"
+    "dateLetters": "يوم شهر سنة",
+    "openDatePicker": "فتح منتقي التاريخ",
+    "highlightedDate": "التاريخ المميَّز"
   },
   "pdf": {
     "invitation": "رسالة دعوة",

@@ -142,7 +142,9 @@
     "errorTitle": "出了点问题",
     "availableCount": "{count, plural, other {{n} 人有空}}",
     "availableOf": "{count, plural, other {{n} / {total} 人有空}}",
-    "dateLetters": "日 月 年"
+    "dateLetters": "日 月 年",
+    "openDatePicker": "打开日期选择器",
+    "highlightedDate": "突出显示的日期"
   },
   "pdf": {
     "invitation": "邀请函",

@@ -142,7 +142,9 @@
     "errorTitle": "Что-то пошло не так",
     "availableCount": "{count, plural, one {{n} может прийти} few {{n} могут прийти} many {{n} могут прийти} other {{n} могут прийти}}",
     "availableOf": "{count, plural, one {{n} / {total} может прийти} few {{n} / {total} могут прийти} many {{n} / {total} могут прийти} other {{n} / {total} могут прийти}}",
-    "dateLetters": "ДД ММ ГГГГ"
+    "dateLetters": "ДД ММ ГГГГ",
+    "openDatePicker": "Открыть календарь",
+    "highlightedDate": "Выделенная дата"
   },
   "pdf": {
     "invitation": "Приглашение",

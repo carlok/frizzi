@@ -11,6 +11,11 @@
  export let interactive = true;
  export let busy = false;
  export let choose: (id: string) => void;
+ /** When the same dates are listed as controls below, the calendar is a pointer shortcut only:
+  *  hidden from assistive technology and out of the tab order, so each date is announced once. */
+ export let mirrored = false;
+ /** Legend for the marked days: the person's choices, or the date the organizer is looking at. */
+ export let markedLabel = '';
 
  function monthDays(month: string, firstDay: number) {
    const date = new Date(`${month}-01T12:00:00Z`);
@@ -41,12 +46,12 @@
 </script>
 
 {#if shownMonth}
- <section class="event-calendar" aria-label={$t.eventCalendar}>
+ <section class="event-calendar" aria-label={mirrored ? undefined : $t.eventCalendar} aria-hidden={mirrored || undefined}>
   <div class="calendar-month">
-   <button type="button" aria-label={$t.previousMonth} disabled={monthIndex<=0}
+   <button type="button" aria-label={$t.previousMonth} disabled={monthIndex<=0} tabindex={mirrored ? -1 : undefined}
      on:click={()=>month=months[monthIndex-1]}><ChevronLeft size={18} class="rtl:rotate-180" aria-hidden="true"/></button>
-   <strong aria-live="polite">{monthTitle}</strong>
-   <button type="button" aria-label={$t.nextMonth} disabled={monthIndex>=months.length-1}
+   <strong aria-live={mirrored ? undefined : 'polite'}>{monthTitle}</strong>
+   <button type="button" aria-label={$t.nextMonth} disabled={monthIndex>=months.length-1} tabindex={mirrored ? -1 : undefined}
      on:click={()=>month=months[monthIndex+1]}><ChevronRight size={18} class="rtl:rotate-180" aria-hidden="true"/></button>
   </div>
   <div class="calendar-grid">
@@ -62,7 +67,7 @@
      {@const label = `${formatDate(day,language)} · ${formatTime(slot.start,language)}${slot.end ? ' – '+formatTime(slot.end,language) : ''}${confirmed ? ' · '+$t.confirmedDate : ''}`}
      {#if interactive}
       <button type="button" class="calendar-day proposed" class:marked={pressed} class:confirmed
-        data-calendar-date={day} aria-label={label} aria-pressed={pressed} title={label} disabled={busy}
+        data-calendar-date={day} aria-label={label} aria-pressed={pressed} title={label} disabled={busy} tabindex={mirrored ? -1 : undefined}
         on:click={()=>choose(slot.id)}>{dayNumber}</button>
      {:else}
       <span class="calendar-day proposed" class:marked={pressed} class:confirmed
@@ -78,7 +83,7 @@
   </div>
   <ul class="calendar-legend">
    <li class="calendar-key proposed">{$t.proposedDates}</li>
-   {#if interactive || selected.length}<li class="calendar-key marked">{$t.selectedDates}</li>{/if}
+   {#if interactive || selected.length}<li class="calendar-key marked">{markedLabel || $t.selectedDates}</li>{/if}
    {#if confirmedId}<li class="calendar-key confirmed">{$t.confirmedDate}</li>{/if}
   </ul>
  </section>

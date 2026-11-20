@@ -142,7 +142,9 @@
     "errorTitle": "Algo correu mal",
     "availableCount": "{count, plural, =0 {{n} disponíveis} one {{n} disponível} other {{n} disponíveis}}",
     "availableOf": "{count, plural, =0 {{n} / {total} disponíveis} one {{n} / {total} disponível} other {{n} / {total} disponíveis}}",
-    "dateLetters": "DD MM AAAA"
+    "dateLetters": "DD MM AAAA",
+    "openDatePicker": "Abrir o calendário",
+    "highlightedDate": "Data destacada"
   },
   "pdf": {
     "invitation": "Carta de convite",
